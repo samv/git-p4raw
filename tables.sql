@@ -107,3 +107,10 @@ create table label (
        primary key (tagname, depotpath),
        revision int NOT NULL       
 );
+
+create table rev_blobs {
+	depotpath TEXT not null,
+	revision int not null,
+	primary key (depotpath,revision) references rev,
+	blobid char[40] not null
+}

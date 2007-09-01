@@ -128,6 +128,49 @@ sub do_load {
 	}
 }
 
+sub do_blobs {
+	my $dbh = shift;
+	# psuedocode for blob import.
+	# 1. find the lowest change which is yet to be marked as
+	#    imported
+	# 2. get all of the files in it
+	# 3. for each of those files, find all the ones without
+	#    rev_blob rows
+	# 4. for each of those files, find *all* of the branched
+	#    versions of it, and send them all at once to
+	#    git-fast-import, entering rev_blob rows for them as we
+	#    get hashes back from git-fast-import
+	#    It's quite important to do all the revisions of a file at
+	#    once, otherwise fast-import will not be able to make
+	#    on-the-fly deltas and the repo will become gigabytes.
+	# 
+	#    note "p4 print" is not required; can just use rcs
+	#    directly by looking at the "rev" table; it has a rcs
+	#    filename and revision that quite adequately refers to an
+	#    rcs version.  So you can just collect
+	#    `co -p1.2 -kb depot/mg.c` (eg), get its length, confirm
+	#    the MD5, and then feed to git-fast-import using the
+	#    "mark" functionality, perhaps marking it with the MD5
+	#    or depotpath/revision.  Then when the fast-import
+	#    "checkpoint" command is issued we will get back the
+	#    GIT-SHA1 values.
+	#    In fact I'd be highly tempted to parse the RCS file
+	#    directly, as it might be significantly faster to hold
+	#    the latest version of each RCS file in memory, as we work
+	#    backwards through the revisions and construct new
+	#    versions of it for feeding to fast-import.  Consider an
+	#    RCS file with many revisions; getting all revisions out
+	#    with `co -p` will be O(N^2) but directly will be O(N)
+
+	# 5. finally, we have rev_blob rows for all of the files
+	#    in this version, so send a tree and/or commit object
+	#    (though it might be easier to use
+	#    `git update-index --index-info`).  Information from the
+	#    integed table should probably go into the commit message,
+	#    where it is not redundant (which is a difficult criterion
+	#    to nail down for sure!)
+}
+
 #=====================================================================
 #  MAIN SECTION STARTS HERE
 #=====================================================================
