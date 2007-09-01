@@ -1,0 +1,148 @@
+#!/usr/bin/perl
+
+use strict vars, subs;
+use warnings;
+use Scriptalicious;
+use FindBin qw($Bin);
+use List::Util qw(sum);
+use DBI;
+
+sub do_setup {
+	my $dbh = shift;
+	open SQL, "<$Bin/tables.sql" or die $!;
+	my $statements = join "", <SQL>;
+	close SQL;
+	mutter "Running: $statements";
+	$dbh->do($statements);
+	say "Set up DB OK";
+}
+sub do_drop {
+	my $dbh = shift;
+	open SQL, "<$Bin/tables.sql" or die $!;
+	my $statements = join ";\n",
+		map { m{create table (\S+)} ? ("drop table $1") : () }
+			<SQL>;
+	close SQL;
+	mutter "Running: $statements";
+	$dbh->do($statements);
+	say "Dropped DB OK";
+}
+
+sub do_load {
+	my $dbh = shift;
+	while ( my $filename = shift ) {
+		if ( $filename =~ m{\.gz$} ) {
+			$filename = "zcat $filename|";
+		}
+		my %wanted =
+			( "db.desc" => "change_desc",
+			  "db.integed" => "integed",
+			  "db.change" => "change",
+			  "db.revcx" => "revcx",
+			  "db.rev" => "rev",
+			  "db.label" => "label",
+			);
+		my %sth;
+		my $get_sth = sub {
+			my ($table, $size)=@_;
+			$sth{$table."\0".$size} ||= do {
+				$dbh->commit;
+				$dbh->begin_work;
+				my $sql = "INSERT INTO $table "
+					."VALUES (".join(",",("?")x$size).")";
+				whisper "Preparing: $sql";
+				$dbh->prepare($sql);
+			};
+		};
+		my $wanted_re = join "|", keys %wanted;
+		my $regex_wanted = qr/(?:$wanted_re)/;
+		open JOURNAL, "$filename" or die $!;
+		#binmode JOURNAL, ":encoding(iso-8859-1)";
+		my ($rows, $dirty, $dirty_rows);
+		$dbh->begin_work;
+		$dbh->{AutoCommit} = 0;
+		$dbh->{PrintError} = 0;
+		my %count;
+		while ( <JOURNAL> ) {
+			next unless m{^\@pv\@\s\d+\s@($regex_wanted)@};
+			my $db = $wanted{$1};
+			my @columns;
+			while ( (pos($_)||0)+1 < length $_ ) {
+				my $pre = pos $_;
+				my $ok = m{\G(?:\@((?:[^@]+|\@\@)*)\@|(-?\w+))\s}g;
+				if ( !$ok ) {
+					pos($_) = $pre;
+				}
+				my ($string, $token) = ($1, $2) if $ok;
+				if ( defined $string ) {
+					$string =~ s{\@\@}{\@}g;
+					utf8::upgrade($string);
+					push @columns, $string;
+				}
+				elsif ( defined $token ) {
+					push @columns, $token;
+				}
+				else {
+					die "end of file; $_" if eof JOURNAL;
+					my $p = pos $_;
+					pos($_)=0;
+					my $line;
+					my @extra;
+					do {
+						$line = readline JOURNAL;
+						push @extra, $line;
+					} until ($line =~ m{@\s*$});
+					$_.=join("",@extra);
+					pos($_) = $p;
+					redo;
+				}
+			}
+			@columns = (@columns[3..$#columns]);
+			my $sth = $get_sth->($db,scalar(@columns));
+			eval {
+				$sth->execute(@columns);
+				$rows++;
+				$dirty_rows++;
+				$dirty+=sum map { length } @columns;
+				if ( $VERBOSE > 1 ) {
+					print "Saved: $columns[0]\n";
+				}
+			};
+			if ( $@ ) {
+				use Data::Dumper;
+				barf "DBI error ($@); Data: ".Dumper(\@columns);
+			}
+			$count{$db}++;
+			if ( $dirty > (1<<18) or $dirty_rows > 5000 ) {
+				say "commit after $rows rows: ".
+					join("; ", map{"$count{$_}x$_"} keys %count);
+				%count=();
+				$dirty = 0;
+				$dirty_rows = 0;
+				$dbh->commit;
+				$dbh->begin_work;
+			}
+		}
+		$dbh->commit;
+		$dbh->{AutoCommit} = 1;
+	}
+}
+
+#=====================================================================
+#  MAIN SECTION STARTS HERE
+#=====================================================================
+getopt();
+
+binmode STDOUT, ":utf8";
+
+my $action = shift;
+abort "no action given" unless $action;
+abort "bad action/argument `$action'" unless defined &{"do_$action"};
+
+my $dbh = DBI->connect("dbi:Pg:dbname=p4raw");
+$dbh->{RaiseError}=1;
+$dbh->{PrintError}=1;
+$dbh->{AutoCommit}=1;
+
+&{"do_$action"}($dbh, @ARGV);
+
