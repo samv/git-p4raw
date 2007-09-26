@@ -8,15 +8,28 @@ use List::Util qw(sum);
 use Data::Dumper;
 use DBI;
 
-sub do_setup {
+sub do_init {
 	my $dbh = shift;
+	$dbh->begin_work;
+	say "Setting up tables on DB ".$dbh->{pg_db}." (in a transaction)";
 	open SQL, "<$Bin/tables.sql" or die $!;
 	my $statements = join "", <SQL>;
 	close SQL;
 	mutter "Running: $statements";
-	$dbh->do($statements);
+	eval {
+		local($dbh->{PrintError});
+		$dbh->do($statements);
+		$dbh->commit;
+	};
+	if ( $@ ) {
+		my $msg = $@;
+		chomp($msg);
+		$dbh->rollback;
+		barf "couldn't set up tables - already setup? ($msg)";
+	}
 	say "Set up DB OK";
 }
+
 sub do_drop {
 	my $dbh = shift;
 	open SQL, "<$Bin/tables.sql" or die $!;
@@ -184,7 +197,7 @@ my $action = shift;
 abort "no action given" unless $action;
 abort "bad action/argument `$action'" unless defined &{"do_$action"};
 
-my $dbh = DBI->connect("dbi:Pg:dbname=p4raw");
+my $dbh = DBI->connect("dbi:Pg:");
 $dbh->{RaiseError}=1;
 $dbh->{PrintError}=1;
 $dbh->{AutoCommit}=1;
