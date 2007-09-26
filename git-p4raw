@@ -5,6 +5,7 @@ use warnings;
 use Scriptalicious;
 use FindBin qw($Bin);
 use List::Util qw(sum);
+use Data::Dumper;
 use DBI;
 
 sub do_setup {
@@ -39,6 +40,7 @@ sub do_load {
 			  "db.integed" => "integed",
 			  "db.change" => "change",
 			  "db.revcx" => "revcx",
+			  "db.user" => "p4user",
 			  "db.rev" => "rev",
 			  "db.label" => "label",
 			);
@@ -109,13 +111,13 @@ sub do_load {
 				}
 			};
 			if ( $@ ) {
-				use Data::Dumper;
 				barf "DBI error ($@); Data: ".Dumper(\@columns);
 			}
 			$count{$db}++;
-			if ( $dirty > (1<<18) or $dirty_rows > 5000 ) {
+			if ( $dirty > (1<<18) or $dirty_rows >= 5000 ) {
 				say "commit after $rows rows: ".
-					join("; ", map{"$count{$_}x$_"} keys %count);
+					join("; ", map{"$count{$_} x $_"}
+					     keys %count);
 				%count=();
 				$dirty = 0;
 				$dirty_rows = 0;
