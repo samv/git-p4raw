@@ -204,3 +204,219 @@ $dbh->{AutoCommit}=1;
 
 &{"do_$action"}($dbh, @ARGV);
 
+__END__
+
+=head1 NAME
+
+git-p4raw - git-fast-import exporter for RAW perforce repositories
+
+=head1 SYNOPSIS
+
+ # import commands:
+ git-p4raw init     # to return here: git-p4raw drop
+ git-p4raw load
+ git-p4raw check
+ git-p4raw graft CHANGE commit-ish  # configure manual reparenting
+ git-p4raw import   # to return here: git-p4raw truncate
+
+ # query commands:
+ git-p4raw { find-change N | describe N | integrated DEPOTPATH
+           | filelog DEPOTPATH | changes [ -l ] [ file[#range] ]
+           | annotate PATH | 
+
+=head1 DESCRIPTION
+
+B<git-p4raw> is a tool for importing perforce repositories into git.
+
+It assumes you have the raw Perforce repository lying around, and does
+not require the perforce server.  All you need are the C<checkpoint>,
+C<journal> and RCS files.  If you want to specify things like where
+the target git repository is, or which Postgres database to use, this
+is configured in the normal way with environment variables
+(C<GIT_DIR>, C<PGDATABASE>, etc).
+
+The first command, C<init>, initialises the database tables and git
+repository.  C<drop> can be used to drop all database tables and
+destroy the git repository, in a somewhat molly-guarded fashion.
+
+The second command, C<load>, loads all of the Perforce data from the
+C<checkpoint.NNN.gz> and C<journal> files which it expects to find in
+the current directory (the root of the Perforce import).
+
+The third command, C<check>, adds constraints to the database schema.
+If any of these constraints fail, you should investigate what is going
+on and correct the data before proceeding, as the code probably makes
+assumptions that these constraints hold.  This command may ask
+questions, the answers to which will be written to a file called
+C<p4raw-extra> in the Perforce checkpoint format (and automatically
+re-loaded if you run C<load> again).  Already added constraints will
+not be re-added. (TODO - prototype that just adds constraints works,
+but missing integration records and rotated user licenses needed to be
+handled manually)
+
+The C<graft> command is optional, and is principally for those who
+want to override the decisions that this tool makes (and can be shown
+ahead of time using the C<describe> sub-command, see below).
+
+Finally, C<import> will perform the final step of exporting commits to
+git, using C<git-fast-import> (TODO - prototype finished, but will be
+brought into this branch more tidily).
+
+These other commands are also planned, to show information from the
+database.  Many of these commands closely correspond to their C<p4>
+counterparts, though some are unique to this tool.
+
+=over
+
+=item C<git-p4raw find-change N> (TODO)
+
+(post-conversion) Just show the mapped git commits for a change
+number.  There may be more than one if the change affected multiple
+branches.  This command will be modelled on C<git-svn find-rev>, so
+also be capable of showing the Perforce change number from a git
+commit ID (a convenience wrapper for C<git-log -1 COMMIT | grep
+p4-url:>).  In principle this command can run with or without the
+database information by looking for the C<p4-url:> messages in the
+commitlog.
+
+=item C<git-p4raw describe N> (TODO)
+
+Show change N vital statistics (and, post-conversion, mapped git
+commits), and the files that were modified in that change.  A bit like
+C<p4 describe -s> or C<git show --stat>.
+
+This command performs a fairly mammoth query to determine whether
+changes with lots of "integrate" changes look enough like a
+cross-merge to be represented as such.
+
+=item C<git-p4raw integrated DEPOTPATH> (TODO)
+
+Mimic the 'p4 integrated' command precisely, from the database
+information.
+
+With git you'd probably use something like C<gitk --all -- filename>
+to show all changes that touched a particular file and their relative
+ancestry.
+
+=item C<git-p4raw filelog DEPOTPATH> (TODO)
+
+Mimic the 'p4 filelog' command precisely, from the database
+information.
+
+Again, you'd probably just use the C<gitk> file selector or perhaps
+even C<git log> with the same options to show this information.  The
+principle difference being you won't see things like C<copy into>,
+C<branch into>, etc - only the C<from> relationships.
+
+=item C<git-p4raw changes [ -m NUM | -l ] [ file[revRange] ]> (TODO)
+
+Mimic the 'p4 changes' command closely from the database information.
+
+C<-m NUM> is like C<git log -NUM>, and the C<-l> is like dropping the
+C<--pretty=oneline> from the concise C<git-log --pretty=oneline>
+command (see also L<git-config/alias.*>).  C<git-log> also supports
+adding C<file>, but the C<revRange> thing is a perforce-ism not
+carried over.
+
+The C<-i> option is basically implied by C<git-log>, so long as the
+"integrate" node was a branch cross-merge.  For cherry picking, the
+equivalent command will be something like C<git-log --left-right
+--cherry-pick otherbranch...HEAD -- filename>, and won't see cases
+where the change was picked from another change with modifications.
+However, there I<will> be a note in the changelog that the file was
+picked when using C<git-log>, and as a last resort there is always
+this command.
+
+=item C<git-p4raw annotate file[revRange]> (TODO)
+
+Run C<git annotate> on the final result for the equivalent of this.
+However, this command will print the (head) revisions for the given
+depotpath which C<git annotate> would not normally search; this
+information could be used with C<git annotate --incremental> to
+produce the same results as C<p4 annotate>.
+
+That problem goes away in practice with a changeset-based development
+style, so this is mostly for getting the best annotation possible for
+the current Perforce changes.
+
+=back
+
+As this program is not currently envisioned to support committing back
+to Perforce, these commands will never be implemented, but details on
+how the same thing is achieved with git follows;
+
+=over
+
+=item C<p4 sync>
+
+This is something like C<git pull>, which is a C<git fetch> and a
+C<git merge> in one.  However, in git you should always commit (or
+stash) local changes first.
+
+C<p4 sync -f> is very much like C<git merge -s theirs>, similarly
+C<p4 sync -k> is like C<git merge -s ours>
+
+The C<-n> option, well with git you normally just stash your changes
+somewhere safe, merge and see what happens.  If you don't like it you
+can C<git reset> back to where you were.  But if you like, the
+plumbing command C<git read-tree -m> with a temporary "index" (read
+the man page) can be used to do exactly the same thing (say, in a
+script).
+
+=item C<p4 opened>
+
+This is very similar to the git 1.5.3+ command C<git stash list>
+followed by C<git stash show>.  Or the alternate porcelain system
+called "stacked git".
+
+=item C<p4 edit>
+
+With C<git add> you mark a file (in its current state) as belonging to
+the commit/change that you are working on.  Saving files as belonging
+to a particular stashed change can be done by stashing it with a new
+name, pulling out the old stash and cherry picking the new stash on
+top.  This is certainly one area where stacked git (currently)
+provides much better command set, if less integration with
+hunk-picking tools like "git gui".
+
+=item C<p4 diff>
+
+C<-du> is the default to C<git diff>.  You'll have to translate the
+arguments to diff using the C<describe> or C<find-change>
+
+=item C<p4 submit>
+
+The command is C<git push>.  Assuming you have access (or maybe you're
+pushing to an open access/mob branch), you can push any upstream
+branch forward that has its HEAD commit in your ancestry.  So,
+atomicity is enforced in that manner - if someone else pushes first,
+you need to merge their commit in before pushing yours.  However you
+can always push to a new branch.
+
+Creating a new branch is not an issue; the names are considered
+temporary pointers which can safely be discarded if the revision is
+merged, or even thrown into a non-default ref space such as
+C<refs/Attic/...> (sick sense of humour, I know) so that they don't
+clutter, should the change be considered not worth preserving, or
+should it get fixed up into a better change.  It can even get deleted.
+
+=item C<p4v>
+
+Currently the major git UIs are C<git gui> (for making commits, or
+amending the last commit) and C<gitk> (for viewing/searching the
+commit graph, inspecting commits, and some limited amount of changes
+like cherry picking).
+
+=back
+
+=cut
+
+# Local Variables:
+#   mode: cperl
+#   cperl-brace-offset: 0
+#   cperl-continued-brace-offset: 0
+#   cperl-indent-level: 8
+#   cperl-label-offset: -8
+#   cperl-merge-trailing-else: nil
+#   cperl-continued-statement-offset: 8
+# End:
