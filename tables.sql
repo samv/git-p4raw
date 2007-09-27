@@ -124,3 +124,19 @@ create table rev_blobs (
 	primary key (depotpath,revision),
 	blobid char(40) not null
 );
+
+-- what branches we determined exist along the way
+create table branches (
+       branchpath TEXT not null primary key,
+       sourcebranch TEXT null,
+       revision INT null
+);
+
+-- mapping changes to commit ID(s) - changes can affect multiple branches!
+create table change_commits (
+	branchpath TEXT not null,
+	change int not null,
+	primary key (branchpath, change),
+	treeid char(40) not null,
+	commitid char(40) not null
+);
