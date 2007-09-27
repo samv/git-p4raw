@@ -65,7 +65,15 @@ sub do_drop {
 
 sub do_load {
 	my $dbh = shift;
-	while ( my $filename = shift ) {
+	my @files;
+	if ( @_ ) {
+		@files = @_;
+	}
+	else {
+		@files = grep { -f } <journal checkpoint.*.gz p4raw-extra>;
+	}
+	while ( my $filename = shift @files ) {
+		say "loading data from $filename";
 		if ( $filename =~ m{\.gz$} ) {
 			$filename = "zcat $filename|";
 		}
@@ -82,8 +90,6 @@ sub do_load {
 		my $get_sth = sub {
 			my ($table, $size)=@_;
 			$sth{$table."\0".$size} ||= do {
-				$dbh->commit;
-				$dbh->begin_work;
 				my $sql = "INSERT INTO $table "
 					."VALUES (".join(",",("?")x$size).")";
 				whisper "Preparing: $sql";
