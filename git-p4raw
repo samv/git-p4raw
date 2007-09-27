@@ -7,9 +7,13 @@ use FindBin qw($Bin);
 use List::Util qw(sum);
 use Data::Dumper;
 use DBI;
+use Cwd;
+use File::Path qw(rmtree);
 
 sub do_init {
 	my $dbh = shift;
+	run("git", "init");
+	run("git", "config", "p4raw.source", getcwd);
 	$dbh->begin_work;
 	say "Setting up tables on DB ".$dbh->{pg_db}." (in a transaction)";
 	open SQL, "<$Bin/tables.sql" or die $!;
@@ -33,13 +37,30 @@ sub do_init {
 sub do_drop {
 	my $dbh = shift;
 	open SQL, "<$Bin/tables.sql" or die $!;
-	my $statements = join ";\n",
+	my $statements = join ";\n", reverse
 		map { m{create table (\S+)} ? ("drop table $1") : () }
 			<SQL>;
 	close SQL;
 	mutter "Running: $statements";
+	$dbh->begin_work;
+	$dbh->do("set constraints all deferred");
 	$dbh->do($statements);
+	$dbh->commit;
 	say "Dropped DB OK";
+	my $git_dir = capture("git", "rev-parse", "--git-dir");
+	my $source = capture("git", "config", "p4raw.source");
+	if ( $source ) {
+		if ( $source eq getcwd ) {
+			rmtree($git_dir);
+		}
+		else {
+			moan("source is '$source', not ".getcwd
+			     ."; rm -rf $git_dir yourself");
+		}
+	}
+	else {
+		moan "no p4raw.source; not removing no git dir";
+	}
 }
 
 sub do_load {
