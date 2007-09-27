@@ -176,6 +176,65 @@ sub do_load {
 	}
 }
 
+sub do_check {
+	my $dbh = shift;
+
+	if ( $VERBOSE > 0 ) {
+		require Text::CSV_XS;
+	}
+
+	open SQL, "<$SHARE/constraints.sql" or die $!;
+	my $constraints = join "", <SQL>;
+	close SQL;
+
+	while ( $constraints =~ m{\G(?: ( \s* --(?-s:.*)
+					  (?: \n\s*--(?-s:.*) )* )
+			            | \s* (.*?) (?:;|\Z) ) }sgx ) {
+		my ($comment, $sql) = ($1, $2);
+		if ( $comment ) {
+			$comment =~ s{^\s*--\s*}{}mg;
+			say $comment;
+		}
+		elsif ( $sql ) {
+			$sql =~ s{^\s*}{}s;
+			if ( $sql =~ m{^select}i ) {
+				mutter "query: $sql";
+				my $sth = $dbh->prepare($sql);
+				$sth->execute;
+				my $csv;
+				if ( $VERBOSE > 0 ) {
+					$csv = Text::CSV_XS->new
+						({binary => 1,
+						  eol => "\n"});
+					my @N = @{ $sth->{NAME} };
+					$csv->print(\*STDOUT, \@N);
+				}
+				my $rows;
+				while ( my @row = $sth->fetchrow_array ) {
+					if ( $csv ) {
+						$csv->print(\*STDOUT, \@row)
+							or barf $csv->error;
+					}
+					$rows++;
+				}
+				say "($rows rows".
+					($VERBOSE==0?"; use -v to see them"
+					 :"").")";
+			}
+			else {
+				mutter "running: $sql";
+				eval { local($dbh->{PrintError});
+				       $dbh->do($sql) };
+				if ( $@ ) {
+					my $x = $@;
+					chomp($x);
+					say "error from DB ($x), continuing";
+				}
+			}
+		}
+	}
+}
+
 sub do_blobs {
 	my $dbh = shift;
 	# psuedocode for blob import.
