@@ -222,11 +222,12 @@ git-p4raw - git-fast-import exporter for RAW perforce repositories
  # query commands:
  git-p4raw { find-change N | describe N | integrated DEPOTPATH
            | filelog DEPOTPATH | changes [ -l ] [ file[#range] ]
-           | annotate PATH | 
+           | annotate PATH }
 
 =head1 DESCRIPTION
 
-B<git-p4raw> is a tool for importing perforce repositories into git.
+B<git-p4raw> is a tool for importing perforce repositories into git,
+and querying the legacy metadata in perpetuity.
 
 It assumes you have the raw Perforce repository lying around, and does
 not require the perforce server.  All you need are the C<checkpoint>,
