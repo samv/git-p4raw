@@ -74,6 +74,7 @@ sub do_load {
 	}
 	while ( my $filename = shift @files ) {
 		say "loading data from $filename";
+		start_timer;
 		if ( $filename =~ m{\.gz$} ) {
 			$filename = "zcat $filename|";
 		}
@@ -167,6 +168,7 @@ sub do_load {
 		}
 		$dbh->commit;
 		$dbh->{AutoCommit} = 1;
+		say "Loaded $rows rows from $filename in ".show_elapsed;
 	}
 }
 
