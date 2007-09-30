@@ -36,6 +36,7 @@ create table integed (
 
 create table p4user (
     who_user text, -- username
+    primary key (who_user),
     email text,    -- e-mail address
     junk text,     -- always empty?
     effective int, -- a guess.

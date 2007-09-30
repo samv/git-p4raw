@@ -49,6 +49,10 @@ where
 group by
 	c.who_user;
 
+-- checking all change number references are valid
+alter table change add constraint change_who_user_valid
+      foreign key (who_user) references p4user;
+
 -- the 'integed' table is denormalised, with rows normally appearing
 -- in pairs.  However, these rows were missing their partners:
 select								      
