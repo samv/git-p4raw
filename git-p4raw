@@ -5,11 +5,13 @@ use warnings;
 use Scriptalicious;
 use FindBin qw($Bin);
 use List::Util qw(sum);
+use Scalar::Util qw(looks_like_number);
 use Data::Dumper;
 use DBI;
 use Cwd;
 use IO::Handle;
 use File::Path qw(rmtree);
+use Fatal qw(:void open);
 
 use vars qw($SHARE);
 $SHARE = $Bin;
@@ -74,7 +76,9 @@ sub do_load {
 		@files = @_;
 	}
 	else {
-		@files = grep { -f } <journal checkpoint.*.gz p4raw-extra>;
+		@files = grep { -f }
+			(<journal checkpoint journal.*.gz checkpoint.*.gz>,
+			 <p4raw-extra-*.asv>);
 	}
 	while ( my $filename = shift @files ) {
 		say "loading data from $filename";
@@ -176,6 +180,30 @@ sub do_load {
 	}
 }
 
+sub _to_p4_journal_format {
+	my $db_name = shift;
+	return
+		((join " ", map {
+			my $x = $_;
+			if ( looks_like_number $x ) {
+				$x
+			}
+			else {
+				$x =~ s{\@}{\@\@}g;
+				"\@$x\@"
+			}
+		} ("pv", 3, "db.$db_name", @_))."\n");
+}
+
+sub _journal_p4_row {
+	my $statefile = shift;
+	my $table = shift;
+	my $mode = ( -e $statefile ? ">>" : ">" );
+	open JOURNAL, $mode, $statefile;
+	print JOURNAL _to_p4_journal_format $table, @_;
+	close JOURNAL;
+}
+
 sub do_check {
 	my $dbh = shift;
 
@@ -186,6 +214,7 @@ sub do_check {
 	open SQL, "<$SHARE/constraints.sql" or die $!;
 	my $constraints = join "", <SQL>;
 	close SQL;
+	my $do_this;
 
 	while ( $constraints =~ m{\G(?: ( \s* --(?-s:.*)
 					  (?: \n\s*--(?-s:.*) )* )
@@ -193,6 +222,12 @@ sub do_check {
 		my ($comment, $sql) = ($1, $2);
 		if ( $comment ) {
 			$comment =~ s{^\s*--\s*}{}mg;
+			if ( $comment =~ s{^FOUND: (.*)}{}ms ) {
+				$do_this = $1;
+			}
+			else {
+				undef($do_this);
+			}
 			say $comment;
 		}
 		elsif ( $sql ) {
@@ -209,17 +244,33 @@ sub do_check {
 					my @N = @{ $sth->{NAME} };
 					$csv->print(\*STDOUT, \@N);
 				}
-				my $rows;
+				my $rows = 0;
+				my @data;
 				while ( my @row = $sth->fetchrow_array ) {
 					if ( $csv ) {
 						$csv->print(\*STDOUT, \@row)
 							or barf $csv->error;
 					}
+					if ( $do_this ) {
+						push @data, \@row;
+					}
 					$rows++;
 				}
 				say "($rows rows".
-					($VERBOSE==0?"; use -v to see them"
+					($rows&&$VERBOSE==0?"; use -v to see them"
 					 :"").")";
+				if ( $do_this and $rows ) {
+					no strict 'refs';
+					my $statefile =
+						&{"$do_this"}($dbh, \@data);
+					if ( $statefile ) {
+						eval {
+							do_load($dbh, $statefile);
+						};
+						moan("load of new data failed; $@")
+							if $@;
+					}
+				}
 			}
 			else {
 				mutter "running: $sql";
