@@ -35,6 +35,20 @@ create index integed_object_idx on integed (object, object_maxrev);
 create index rev_rcs_file on rev(rcs_file, rcs_revision);
 create index change_commits_chg_idx on change_commits(change);
 
+-- these users made changes, but don't exist in the users table:
+-- FOUND: add_p4users
+select
+	c.who_user,
+	count(c.change) as changes
+from
+	change c
+	left join p4user u
+		using (who_user)
+where
+	u.who_user is null
+group by
+	c.who_user;
+
 -- the 'integed' table is denormalised, with rows normally appearing
 -- in pairs.  However, these rows were missing their partners:
 select								      
@@ -71,16 +85,3 @@ where
 	r.change_type = 4
 order by
 	r.change;
-
--- these users made changes, but don't exist in the users table:
-select
-	c.who_user,
-	count(c.change) as changes
-from
-	change c
-	left join p4user u
-		using (who_user)
-where
-	u.who_user is null
-group by
-	c.who_user;

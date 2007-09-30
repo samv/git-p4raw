@@ -204,6 +204,31 @@ sub _journal_p4_row {
 	close JOURNAL;
 }
 
+sub add_p4users {
+	my $dbh = shift;
+	my $data = shift;
+	my $statefile = "p4raw-extra-users.asv";
+	for my $datum ( @$data ) {
+		my ($who, $count) = @$datum;
+		say "$who made $count changes";
+		my ($realname, $email);
+		do {
+			$realname = prompt_string
+				"Who was using this '$who' moniker?", $realname;
+			say "'$realname' huh.  Ok.";
+			$email = prompt_string
+				("And what was (or is) their e-mail address?",
+				 $email);
+			say "Right, so I'll attribute commits from that usercode "
+				."to $realname <$email>";
+		} until ( prompt_Yn("Sound good?") );
+		_journal_p4_row $statefile, "user",
+			($who, $email, "", time, time,
+			 $realname, "", 0, "", 0);
+	}
+	return $statefile;
+}
+
 sub do_check {
 	my $dbh = shift;
 
