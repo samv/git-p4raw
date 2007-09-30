@@ -228,7 +228,8 @@ sub do_check {
 				if ( $@ ) {
 					my $x = $@;
 					chomp($x);
-					say "error from DB ($x), continuing";
+					say "error from DB ($x), continuing"
+						unless $x =~ m{already exists};
 				}
 			}
 		}
