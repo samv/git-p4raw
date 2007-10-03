@@ -569,9 +569,9 @@ assumptions that these constraints hold.  This command may ask
 questions, the answers to which will be written to a file called
 C<p4raw-extra> in the Perforce checkpoint format (and automatically
 re-loaded if you run C<load> again).  Already added constraints will
-not be re-added. (TODO - prototype that just adds constraints works,
-but missing integration records and rotated user licenses needed to be
-handled manually)
+not be re-added. (TODO - some inconsistencies such as missing
+integration records are not dealt with, and need to be handled
+manually)
 
 The C<graft> command is optional, and is principally for those who
 want to override the decisions that this tool makes (and can be shown
