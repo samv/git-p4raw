@@ -369,7 +369,7 @@ my $action = shift;
 abort "no action given" unless $action;
 abort "bad action/argument `$action'" unless defined &{"do_$action"};
 
-my $dbh = DBI->connect("dbi:Pg:");
+my $dbh = DBI->connect("dbi:Pg:") or barf "DBI connect failed";
 $dbh->{RaiseError}=1;
 $dbh->{PrintError}=1;
 $dbh->{AutoCommit}=1;
