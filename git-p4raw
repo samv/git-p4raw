@@ -312,6 +312,115 @@ sub do_check {
 	}
 }
 
+sub do_find_change {
+	my $dbh = shift;
+	my $rev = shift;
+	$rev or abort "no revision passed to find-change";
+
+	if ( $rev =~ m{^\d{1,6}$} ) {
+		show_git_paths($dbh, $rev);
+	}
+	elsif ( $rev =~ m{^[a-f0-9]{40}$} ) {
+		show_p4_change($dbh, $rev);
+	}
+	else {
+		my ($rc, $revision) = capture_err
+			(-out2 => "/dev/null",
+			 qw(git rev-parse --verify), $rev);
+
+		if ( $? ) {
+			barf "'$rev' is not a valid revision";
+		}
+		chomp($revision);
+		show_p4_change($dbh, $revision);
+	}
+}
+
+sub show_p4_change {
+	my $dbh = shift;
+	my $git_rev = shift;
+
+	my $query = $dbh->prepare(<<SQL);
+select
+	change,
+	branchpath
+from
+	change_commits
+where
+	commitid = ?
+SQL
+	$query->execute($git_rev);
+	my $x = $query->fetchrow_hashref;
+	$query->finish;
+
+	if ( !$SCRIPT_MODE ) {
+		if ( $x ) {
+			say "commit ".substr($git_rev, 0, 12)
+				.(" is Change $x->{change} on branch "
+				  .$x->{branchpath});
+		}
+		else {
+			barf "commit $git_rev not found in DB";
+		}
+	}
+	else {
+		if ( $x ) {
+			print "$x->{change},$x->{branchpath}\n";
+		}
+		else {
+			exit 1;
+		}
+	}
+}
+
+sub show_git_paths {
+	my $dbh = shift;
+	my $change = shift;
+
+	my $query = $dbh->prepare(<<SQL);
+select
+	commitid,
+	branchpath
+from
+	change_commits
+where
+	change = ?
+SQL
+	$query->execute($change);
+	my @d;
+	while ( my $x = $query->fetchrow_hashref ) {
+		push @d, $x;
+	}
+	$query->finish;
+
+	if ( !$SCRIPT_MODE) {
+		if ( @d > 1 ) {
+			say "change $change affected multiple branches:";
+			for ( @d ) {
+				print "branch $_->{branchpath}, see "
+					."commit $_->{commitid}\n";
+			}
+		}
+		elsif ( @d ) {
+			say "change $change was on branch "
+				.("$d[0]{branchpath}, see commit "
+				  .$d[0]{commitid}."\n");
+		}
+		else {
+			barf "change $change not found in DB.  perhaps it was cancelled?";
+		}
+	}
+	else {
+		if ( @d ) {
+			print "$_->{commitid},$_->{branchpath}\n"
+				for @d;
+		}
+		else {
+			exit 1;
+		}
+	}
+}
+
 sub do_blobs {
 	my $dbh = shift;
 	# psuedocode for blob import.
@@ -453,16 +562,13 @@ parsable.  Automatically selected if standard output is not a terminal.
 
 =over
 
-=item C<git-p4raw find-change N> (TODO)
+=item C<git-p4raw find-change N>
 
 (post-conversion) Just show the mapped git commits for a change
 number.  There may be more than one if the change affected multiple
 branches.  This command will be modelled on C<git-svn find-rev>, so
 also be capable of showing the Perforce change number from a git
-commit ID (a convenience wrapper for C<git-log -1 COMMIT | grep
-p4-url:>).  In principle this command can run with or without the
-database information by looking for the C<p4-url:> messages in the
-commitlog.
+commit ID.  Currently this only looks at information in the database.
 
 =item C<git-p4raw describe N> (TODO)
 
