@@ -367,6 +367,7 @@ binmode STDOUT, ":utf8";
 
 my $action = shift;
 abort "no action given" unless $action;
+$action =~ s{-}{_}g;
 abort "bad action/argument `$action'" unless defined &{"do_$action"};
 
 my $dbh = DBI->connect("dbi:Pg:") or barf "DBI connect failed";
