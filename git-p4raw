@@ -518,6 +518,42 @@ the target git repository is, or which Postgres database to use, this
 is configured in the normal way with environment variables
 (C<GIT_DIR>, C<PGDATABASE>, etc).
 
+=head1 COMMAND LINE OPTIONS
+
+=over
+
+=item B<-s, --script>
+
+Instead of printing human-readable output, print something easily
+parsable.  Automatically selected if standard output is not a terminal.
+
+=item B<-h, --help>
+
+Display a program usage screen and exit.
+
+=item B<-V, --version>
+
+Display program version and exit.
+
+=item B<-v, --verbose>
+
+Verbose command execution, displaying things like the
+commands run, their output, etc.
+
+=item B<-q, --quiet>
+
+Suppress all normal program output; only display errors and
+warnings.
+
+=item B<-d, --debug>
+
+Display output to help someone debug this script, not the
+process going on.
+
+=back
+
+=head1 COMMANDS
+
 The first command, C<init>, initialises the database tables and git
 repository.  C<drop> can be used to drop all database tables and
 destroy the git repository, in a somewhat molly-guarded fashion.
@@ -548,17 +584,6 @@ brought into this branch more tidily).
 These other commands are also planned, to show information from the
 database.  Many of these commands closely correspond to their C<p4>
 counterparts, though some are unique to this tool.
-
-=head1 COMMAND LINE OPTIONS
-
-=over
-
-=item C<-s, --script>
-
-Instead of printing human-readable output, print something easily
-parsable.  Automatically selected if standard output is not a terminal.
-
-=back
 
 =over
 
