@@ -13,7 +13,7 @@ use IO::Handle;
 use File::Path qw(rmtree);
 use Fatal qw(:void open);
 
-use vars qw($SHARE);
+use vars qw($SHARE $SCRIPT_MODE);
 $SHARE = $Bin;
 
 sub do_init {
@@ -358,7 +358,10 @@ sub do_blobs {
 #=====================================================================
 #  MAIN SECTION STARTS HERE
 #=====================================================================
-getopt();
+getopt("script|s" => \$SCRIPT_MODE);
+if (! -t STDOUT) {
+	$SCRIPT_MODE = 1;
+}
 
 binmode STDOUT, ":utf8";
 
@@ -435,6 +438,17 @@ brought into this branch more tidily).
 These other commands are also planned, to show information from the
 database.  Many of these commands closely correspond to their C<p4>
 counterparts, though some are unique to this tool.
+
+=head1 COMMAND LINE OPTIONS
+
+=over
+
+=item C<-s, --script>
+
+Instead of printing human-readable output, print something easily
+parsable.  Automatically selected if standard output is not a terminal.
+
+=back
 
 =over
 
