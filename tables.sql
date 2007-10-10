@@ -68,19 +68,30 @@ create table change_desc (
        description TEXT
 );
 
+-- change types
+create table change_type (
+    change_type int not null primary key,
+    title text,
+    description text
+);
+
+insert into change_type values
+	(0, 'add',       'File added to repository'),
+	(1, 'edit',      'File modified'),
+	(2, 'delete',    'File removed'),
+	(3, 'branch',    'File copied from another location'),
+	(4, 'integrate', 'File metadata and/or contents changed');
+
 -- change inventories for revisions
 create table revcx (
        change int not null,	-- change this occurred in
        depotpath text,		-- what changed
        primary key (change, depotpath),
        revision int,		-- new file revision (#number)
-       change_type int CHECK (change_type BETWEEN 0 and 4)
-       		   -- 0 = add       		      
-       		   -- 1 = edit
-       		   -- 2 = delete
-		   -- 3 = branch
-		   -- 4 = integrate
+       change_type int REFERENCES change_type
 );
+
+
 
 -- detail on depot RCS files
 create table rev (
