@@ -421,6 +421,205 @@ SQL
 	}
 }
 
+
+sub do_filelog {
+	my $dbh = shift;
+	my %filelog_opts;
+	{
+		@ARGV = @_;
+		getopt("i" => \$filelog_opts{follow_branches},
+		       "t" => \$filelog_opts{show_time},
+		       "l" => \$filelog_opts{show_desc},
+		       "L" => \$filelog_opts{show_some_desc},
+		       "m=i" => \$filelog_opts{maxRevs},
+		      );
+		@_ = @ARGV;
+	}
+
+	my ($follow_branches, $show_type, $show_desc, $show_some_desc,
+	    $maxRevs);
+	my @placeholders;
+	my $pathspec = shift;
+	my ($depotpath, $rev) = ($pathspec =~ m{^(.*?)(?:#(\d+))?$});
+
+	show_filelogs($dbh, $depotpath, $rev, \%filelog_opts);
+}
+
+# this function converts a perforce type bitmap to a text type.  I
+# didn't try very hard to understand the layout or make this function
+# very clever, I just cared about the types I saw in my own test
+# repository.
+sub _p4_type {
+	my $type = shift;
+	my @supp;
+	if ($type & 4096) {
+       		$type ^= 4096;
+		push @supp, "+w";
+	}
+	return join "",
+		($type ==              0 ? "text"     :
+		$type ==   0b1_0000_0011 ? "binary"   :
+		$type ==   0b1_0000_0001 ? "ubinary"  :
+		$type ==  0b10_0000_0000 ? "xtext"    :
+		$type ==  0b00_0010_0000 ? "ktext"    :
+		$type ==  0b10_0010_0000 ? "kxtext"   :
+		$type ==  0b01_0000_0000 ? "binary+D" :
+		$type == 0b100_0000_0000 ? "symlink"  : "xxx-".sprintf("%b",$type)),
+		@supp;
+}
+
+sub show_filelogs {
+	my $dbh = shift;
+	my $depotpath = shift;
+	my $rev = shift;
+	my $o = shift;
+
+	# build the query.
+	my @placeholders;
+
+	my $time_fmt = 'YYYY/MM/DD';
+	if ( $o->{show_time} ) {
+		$time_fmt .= ' HH:MI:SS';
+	}
+	push @placeholders, $time_fmt, $depotpath;
+
+	my $revision_clause = '';
+	if ( $rev ) {
+		$revision_clause = 'and revision <= ?';
+		push @placeholders, $rev;
+	}
+
+	my $limit_clause = '';
+	if ( $o->{maxRevs}) {
+		$limit_clause = "limit ?";
+		push @placeholders, $o->{maxRevs};
+	}
+
+	my $x = $o->{select_extra}||"";
+
+	my $output = $o->{output_func};
+	if ( !$output ) {
+		$output = sub {
+			my $row = shift;
+			my $ii = shift;
+			print "... #$row->{revision} change ",
+				("$row->{change} $row->{change_type}",
+				 " on $row->{when} by $row->{who_user}",
+				 "\@$row->{who_host} (",
+				 _p4_type($row->{file_type}), ")");
+
+			if ( $o->{show_desc} || $o->{show_some_desc} ) {
+				print "\n\n",
+					(map { "\t$_\n" }
+					 split /\n/,
+					 ( $o->{show_some_desc}
+					   ? substr $row->{description}, 0, 250
+					   : $row->{description} ));
+				print "\n";
+			}
+			else {
+				my $short = $row->{short_desc};
+				$short =~ s{\s}{ }g;
+				print " '$short'\n";
+			}
+			while ( my $i = $ii->() ) {
+				my $other;
+				my ($low, $high);
+				if ( $i->{subject} eq $row->{depotpath} ) {
+					$other = $i->{object};
+					($low, $high) = @{$i}{
+						qw(object_minrev
+						   object_maxrev)};
+				}
+				else {
+					$other = $i->{subject};
+					($low, $high) = @{$i}{
+						qw(subject_minrev
+						   subject_maxrev)};
+				}
+				$low++;
+				my $disp_rev = ($low == $high
+						? "#$high" : "#$low,#$high");
+				print "... ... $i->{int_title} $other",
+					"$disp_rev\n";
+			}
+		};
+	}
+	my $oh = $o->{output_header} || sub {
+		print "$depotpath\n";
+	};
+	my $long_desc = "";
+	my $desc_join = "";
+	if ( $o->{show_desc} or $o->{show_some_desc} ) {
+		$long_desc = "\tchange_desc.description,";
+		$desc_join = "\tleft join change_desc\n"
+			."\t\tusing (change_desc_id)";
+	}
+
+	my $sql = <<SQL;
+select
+	revcx.depotpath,
+	revcx.revision,
+	revcx.change,
+	change_type.title as change_type,
+	rev.file_type,
+	to_char(to_timestamp(change.change_time), ?) as when,
+        change.who_user,
+	change.who_host,
+        change.short_desc,
+$long_desc
+	p4user.realname,
+$x
+	p4user.email
+from
+        revcx
+        inner join change_type
+                using (change_type)
+        left join rev
+                using (depotpath,revision)
+        left join change
+                on (revcx.change = change.change)
+$desc_join
+        left join p4user
+                using (who_user)
+where
+	depotpath = ? $revision_clause
+order by
+	revision desc
+$limit_clause
+SQL
+	whisper "running: $sql";
+	my $query = $dbh->prepare($sql);
+	$query->execute(@placeholders);
+
+	my $integed_fetch = $dbh->prepare(<<SQL);
+select
+	integed.*,
+	int_type.title as int_title
+from
+	integed
+	inner join int_type
+		using (int_type)
+where
+	(subject = ? and subject_maxrev = ?)
+	-- or (object = ? and object_maxrev = ?)
+order by
+	object, object_maxrev desc
+SQL
+	$oh->();
+	while ( my $row = $query->fetchrow_hashref ) {
+		my $executed;
+		my $int_rows_iter = sub {
+			$integed_fetch->execute
+				($depotpath, $row->{revision})
+					unless $executed++;
+			$integed_fetch->fetchrow_hashref;
+		};
+		$output->($row, $int_rows_iter);
+	}
+}
+
+
 sub do_blobs {
 	my $dbh = shift;
 	# psuedocode for blob import.
@@ -614,7 +813,7 @@ With git you'd probably use something like C<gitk --all -- filename>
 to show all changes that touched a particular file and their relative
 ancestry.
 
-=item C<git-p4raw filelog DEPOTPATH> (TODO)
+=item C<git-p4raw filelog DEPOTPATH>
 
 Mimic the 'p4 filelog' command precisely, from the database
 information.

@@ -16,8 +16,8 @@ insert into int_type values
 	(7, 'ignored by',    'patch from subj. were ignored by obj.'),
 	(8, 'delete from',   'patch marked reverted??'),
 	(9, 'delete into',   'patch marked reverted??'),
-	(10, 'copy2 from',   'copied, but in a different way??'),
-	(11, 'copy2 into',   'copied, but in a different way??'),
+	(10, 'edit into',    'patch picked but altered??'),
+	(11, 'edit from',    'patch poked but altered??'),
 	(12, 'edit from',    'patch picked but altered from obj to subj.'),
 	(13, 'edit into',    'patch picked but altered from subj to obj.');
 
