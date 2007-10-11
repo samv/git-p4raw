@@ -445,6 +445,13 @@ sub do_filelog {
 	show_filelogs($dbh, $depotpath, $rev, \%filelog_opts);
 }
 
+sub _p4_disp_rev {
+	my $low = shift;
+	my $high = shift;
+	$low++;
+	($low == $high ? "#$high" : "#$low,#$high");
+}
+
 # this function converts a perforce type bitmap to a text type.  I
 # didn't try very hard to understand the layout or make this function
 # very clever, I just cared about the types I saw in my own test
@@ -538,9 +545,7 @@ sub show_filelogs {
 						qw(subject_minrev
 						   subject_maxrev)};
 				}
-				$low++;
-				my $disp_rev = ($low == $high
-						? "#$high" : "#$low,#$high");
+				my $disp_rev = _p4_disp_rev($low, $high);
 				print "... ... $i->{int_title} $other",
 					"$disp_rev\n";
 			}
