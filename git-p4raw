@@ -625,6 +625,63 @@ SQL
 	}
 }
 
+sub do_integrated {
+	my $dbh = shift;
+	my %integed_opts;
+	{
+		@ARGV = @_;
+		getopt("r" => \$integed_opts{reverse},
+		      );
+		@_ = @ARGV;
+	}
+
+	my $depotpath = shift;
+
+	show_integes($dbh, $depotpath, \%integed_opts);
+}
+
+sub show_integes {
+	my $dbh = shift;
+	my $depotpath = shift;
+	my $o = shift;
+
+	my $which = "subject";
+	if ( $o->{reverse} ) {
+		$which = "object";
+	}
+
+	my $output = $o->{output} || sub {
+		my $row = shift;
+		my $disp_rev = _p4_disp_rev
+			($row->{object_minrev}, $row->{object_maxrev});
+
+		print "$row->{subject}#$row->{subject_maxrev} - ",
+			("$row->{int_title} $row->{object}$disp_rev",
+			 "\n");
+	};
+
+	my $sth = $dbh->prepare(<<SQL);
+select
+	integed.*,
+	int_type.title as int_title
+from
+	integed
+	inner join int_type
+		using (int_type)
+where
+	$which = ?
+order by
+	object,
+	object_minrev,
+	subject_maxrev
+SQL
+
+	$sth->execute($depotpath);
+
+	while ( my $row = $sth->fetchrow_hashref ) {
+		$output->($row);
+	}
+}
 
 sub do_blobs {
 	my $dbh = shift;
@@ -810,7 +867,7 @@ This command performs a fairly mammoth query to determine whether
 changes with lots of "integrate" changes look enough like a
 cross-merge to be represented as such.
 
-=item C<git-p4raw integrated DEPOTPATH> (TODO)
+=item C<git-p4raw integrated DEPOTPATH>
 
 Mimic the 'p4 integrated' command precisely, from the database
 information.
