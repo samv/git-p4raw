@@ -652,11 +652,13 @@ sub show_integes {
 
 	my $output = $o->{output} || sub {
 		my $row = shift;
-		my $disp_rev = _p4_disp_rev
+		my $subj_dr = _p4_disp_rev
+			($row->{subject_minrev}, $row->{subject_maxrev});
+		my $obj_dr = _p4_disp_rev
 			($row->{object_minrev}, $row->{object_maxrev});
 
-		print "$row->{subject}#$row->{subject_maxrev} - ",
-			("$row->{int_title} $row->{object}$disp_rev",
+		print "$row->{subject}$subj_dr - ",
+			("$row->{int_title} $row->{object}$obj_dr",
 			 "\n");
 	};
 
