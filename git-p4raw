@@ -464,6 +464,7 @@ sub _p4_type {
 		$type ==  0b00_0010_0000 ? "ktext"    :
 		$type ==  0b10_0010_0000 ? "kxtext"   :
 		$type ==  0b01_0000_0000 ? "binary+D" :
+		$type ==0b1101_0000_0011 ? "apple"    :
 		$type == 0b100_0000_0000 ? "symlink"  : "xxx-".sprintf("%b",$type)),
 		@supp;
 }
