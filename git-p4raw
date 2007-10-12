@@ -564,30 +564,13 @@ sub show_filelogs {
 
 	my $sql = <<SQL;
 select
-	revcx.depotpath,
-	revcx.revision,
-	revcx.change,
-	change_type.title as change_type,
-	rev.file_type,
-	to_char(to_timestamp(change.change_time), ?) as when,
-        change.who_user,
-	change.who_host,
-        change.short_desc,
 $long_desc
-	p4user.realname,
 $x
-	p4user.email
+	to_char(to_timestamp(change_time), ?) as when,
+	*
 from
-        revcx
-        inner join change_type
-                using (change_type)
-        left join rev
-                using (depotpath,revision)
-        left join change
-                on (revcx.change = change.change)
+	revcx_path
 $desc_join
-        left join p4user
-                using (who_user)
 where
 	depotpath = ? $revision_clause
 order by

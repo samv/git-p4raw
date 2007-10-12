@@ -89,3 +89,29 @@ where
 	r.change_type = 4
 order by
 	r.change;
+
+-- create some views that are used by later methods
+create view revcx_path
+as
+select
+	revcx.depotpath,
+	revcx.revision,
+	revcx.change,
+	change_type.title as change_type,
+	rev.file_type,
+	change.change_time,
+        change.who_user,
+	change.who_host,
+        change.short_desc,
+	p4user.realname,
+	p4user.email
+from
+        revcx
+        inner join change_type
+                using (change_type)
+        left join rev
+                using (depotpath,revision)
+        left join change
+                on (revcx.change = change.change)
+        left join p4user
+                using (who_user);
