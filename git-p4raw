@@ -476,6 +476,34 @@ sub _p4_type {
 		@supp;
 }
 
+sub _p4_changelog {
+	my $row = shift;
+	my $o = shift || {};
+	my @rv = ("$row->{change} ",
+		  (defined $row->{change_type}
+		   ? ($row->{change_type}, " ") : ()),
+		  "on $row->{when} by $row->{who_user}",
+		  "\@$row->{who_host}",
+		  ($row->{file_type}
+		   ? (" (",_p4_type($row->{file_type}), ")") : ()));
+
+	if ( $o->{show_desc} || $o->{show_some_desc} ) {
+		push @rv, "\n\n",
+			(map { "\t$_\n" }
+			 split /\n/,
+			 ( $o->{show_some_desc}
+			   ? substr $row->{description}, 0, 250
+			   : $row->{description} ));
+		push @rv, "\n";
+	}
+	else {
+		my $short = $row->{short_desc};
+		$short =~ s{\s}{ }g;
+		push @rv, " '$short'\n";
+	}
+	@rv;
+}
+
 sub show_filelogs {
 	my $dbh = shift;
 	my $depotpath = shift;
@@ -511,25 +539,7 @@ sub show_filelogs {
 			my $row = shift;
 			my $ii = shift;
 			print "... #$row->{revision} change ",
-				("$row->{change} $row->{change_type}",
-				 " on $row->{when} by $row->{who_user}",
-				 "\@$row->{who_host} (",
-				 _p4_type($row->{file_type}), ")");
-
-			if ( $o->{show_desc} || $o->{show_some_desc} ) {
-				print "\n\n",
-					(map { "\t$_\n" }
-					 split /\n/,
-					 ( $o->{show_some_desc}
-					   ? substr $row->{description}, 0, 250
-					   : $row->{description} ));
-				print "\n";
-			}
-			else {
-				my $short = $row->{short_desc};
-				$short =~ s{\s}{ }g;
-				print " '$short'\n";
-			}
+				_p4_changelog($row, $o);
 			while ( my $i = $ii->() ) {
 				my $other;
 				my ($low, $high);
