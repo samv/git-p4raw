@@ -835,6 +835,114 @@ sub diff_right {
 	return $right;
 }
 
+sub do_changes {
+	my $dbh = shift;
+	my %changes_opts;
+	{
+		@ARGV = @_;
+		getopt("l" => \$changes_opts{show_desc},
+		       "L" => \$changes_opts{show_some_desc},
+		       "m=i" => \$changes_opts{maxRevs},
+		      );
+		@_ = @ARGV;
+	}
+
+	my $pathspec = shift;
+	my ($depotpath, $minRev, $maxRev)
+		= ($pathspec =~ m{^(.*?)(?:#(\d+)(?:,#?(\d+))?)?$})
+			if $pathspec;
+	$maxRev = $minRev if !$maxRev;
+
+	show_changes($dbh, $depotpath, $minRev, $maxRev, \%changes_opts);
+}
+
+sub show_changes {
+	my $dbh = shift;
+	my $depotpath = shift;
+	my $minRev = shift;
+	my $maxRev = shift;
+	my $o = shift;
+
+	my $output = $o->{output} ||= sub {
+		my $row = shift;
+		print "Change ", _p4_changelog($row, $o);
+	};
+
+	# build the query.  some code duplicated from show_filelogs,
+	# CBA fixing for now...
+	my @placeholders;
+
+	my $time_fmt = 'YYYY/MM/DD';
+	if ( $o->{show_time} ) {
+		$time_fmt .= ' HH:MI:SS';
+	}
+	push @placeholders, $time_fmt;
+
+	my @filters;
+
+	my $long_desc = "";
+	my $desc_join = "";
+	if ( $o->{show_desc} or $o->{show_some_desc} ) {
+		$long_desc = "\tchange_desc.description,";
+		$desc_join = "\tleft join change_desc\n"
+			."\t\tusing (change_desc_id)";
+	}
+
+	my $limit_clause = '';
+	if ( $o->{maxRevs}) {
+		$limit_clause = "limit ?";
+		push @placeholders, $o->{maxRevs};
+	}
+
+	my $revcx_join = "";
+	if ( $depotpath ) {
+		$revcx_join = "\tinner join revcx\n"
+			.("\t\ton (revcx.change = change.change and\n"
+			  ."\t\t\trevcx.depotpath = ?)");
+		push @placeholders, $depotpath;
+	}
+
+	if ( $maxRev ) {
+		if ( $minRev ) {
+			push @filters, 'revision between ? and ?';
+			push @placeholders, $minRev, $maxRev;
+		}
+		else {
+			push @filters, 'revision <= ?';
+			push @placeholders, $maxRev;
+		}
+	}
+
+	my $where_clause = "";
+	if ( @filters ) {
+		$where_clause = "where\n\t".join("\nand\t", @filters);
+	}
+
+	my $sql = <<SQL;
+select
+$long_desc
+	to_char(to_timestamp(change_time), ?) as when,
+	change.*
+from
+	change
+$revcx_join
+$desc_join
+$where_clause
+order by
+	change.change desc
+$limit_clause
+SQL
+	if ( $VERBOSE>1) {
+		say "querying changes with: $sql";
+		say "placeholders: (".join(", ", @placeholders).")";
+	}
+	my $sth = $dbh->prepare($sql);
+	$sth->execute(@placeholders);
+	while ( my $row = $sth->fetchrow_hashref ) {
+		$output->($row);
+	}
+}
+
 sub do_blobs {
 	my $dbh = shift;
 	# psuedocode for blob import.
@@ -1040,7 +1148,7 @@ even C<git log> with the same options to show this information.  The
 principle difference being you won't see things like C<copy into>,
 C<branch into>, etc - only the C<from> relationships.
 
-=item C<git-p4raw changes [ -m NUM | -l ] [ file[revRange] ]> (TODO)
+=item C<git-p4raw changes [ -m NUM | -l ] [ file[revRange] ]>
 
 Mimic the 'p4 changes' command closely from the database information.
 
