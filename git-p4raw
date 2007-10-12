@@ -668,6 +668,163 @@ SQL
 	}
 }
 
+sub do_describe {
+	my $dbh = shift;
+
+	my %desc_opts;
+	{
+		@ARGV = @_;
+		getopt(
+		      );
+		@_ = @ARGV;
+	}
+	abort "no change passed to describe" if !@_;
+
+	my $change = shift;
+	if ( $change !~ m{^\d+$} ) {
+		abort "'$change' is not a valid change number";
+	}
+
+	change_stats($dbh, $change, \%desc_opts);
+}
+
+use POSIX qw(strftime);
+
+sub change_stats {
+	my $dbh = shift;
+	my $change = shift;
+	my $o = shift;
+
+	my @cols = qw( change depotpath revision
+		       change_type blobid file_type
+		       int_obj int_obj_type
+		       int_obj_title
+		       int_obj_min int_obj_max
+		       int_subj_min int_subj_max
+		       int_subj_prev_change
+		       int_subj_min_change int_subj_max_change
+		       int_subj_next_change
+		    );
+
+	my $csv;
+	my (%by_sb, %by_change_type, %paths, %by_path);
+	my $output = $o->{output} || sub {
+		my $row = shift;
+		my $sb = "";
+		if ( $row->{int_obj} ) {
+			$row->{sb} = diff_right($row->{depotpath},
+						$row->{int_obj});
+		};
+		my $path = $row->{depotpath};
+		do {
+			$path =~ s{/[^/]*$}{};
+		} while ( $path and $path ne "/" and !exists $paths{$path} );
+
+		if ( !$path or $path eq "/" ) {
+			$path = $row->{depotpath};
+			$path =~ s{/[^/]+$}{};
+			$paths{$path}++;
+		}
+
+		push @{ $by_path{$path} ||= [] },
+			$row;
+	};
+
+	my $show_header = $o->{show_header} || sub {
+		my $d = shift;
+		print "Change $d->{change} by $d->{who_user}\@",
+			("$d->{who_host} on ",
+			 strftime("%Y/%m/%d %H:%M:%S",
+				   localtime($d->{change_time})),
+			 "\n");
+		print "\n";
+		print map { "\t$_\n" } split "\n", $d->{description};
+		print "\n";
+	};
+
+	my $finish = $o->{finish} || sub {
+		for my $path ( sort keys %by_path ) {
+			print "On path $path,\n";
+			for my $ct ( 0..4 ) {
+				my @ct = grep { $_->{change_type} == $ct }
+					@{$by_path{$path}};
+				my @sources = keys %{{
+					(map { ($_->{int_obj}
+						? (diff_right($_->{depotpath},
+							      $_->{int_obj})
+						   => 1)
+						: ()) }
+					 @ct)}};
+				if ( @ct ) {
+					print "\t";
+					print $ct[0]{change_title};
+					print " ";
+					if ( @sources ) {
+						print "srcs = @sources, ";
+					}
+					print scalar(@ct)," file(s)";
+					print "\n";
+				}
+			}
+		}
+	};
+
+	my $sth = $dbh->prepare(<<SQL);
+select
+	*
+from
+	change_desc
+	inner join change
+		using (change_desc_id)
+where
+	change.change = ?
+SQL
+	$sth->execute($change);
+	$show_header->($sth->fetchrow_hashref);
+	$sth->finish;
+
+	$sth = $dbh->prepare(<<SQL);
+select
+	*,
+        int_type.title as int_title,
+	change_type.title as change_title
+from
+	revcx_integed
+	inner join change_type
+		using (change_type)
+	left join int_type
+		on (int_obj_type = int_type)
+where
+	change = ?
+order by
+	length(depotpath) asc
+SQL
+	$sth->execute($change);
+	while ( my $row = $sth->fetchrow_hashref ) {
+		$output->($row);
+	}
+	$finish->();
+}
+
+sub diff_right {
+	my $left = shift;
+	my $right = shift;
+	my $done = 0;
+	while (!$done) {
+		my ($last_component) = $left =~ m{(/[^/]+)$};
+
+		if (!defined($last_component) or
+			$right !~ s{\Q$last_component\E$}{}) {
+
+			$done = 1;
+		}
+		else {
+			$left =~ s{\Q$last_component\E$}{};
+		}
+	}
+	return $right;
+}
+
 sub do_blobs {
 	my $dbh = shift;
 	# psuedocode for blob import.
@@ -842,7 +999,9 @@ branches.  This command will be modelled on C<git-svn find-rev>, so
 also be capable of showing the Perforce change number from a git
 commit ID.  Currently this only looks at information in the database.
 
-=item C<git-p4raw describe N> (TODO)
+=item C<git-p4raw describe N>
+
+(incomplete)
 
 Show change N vital statistics (and, post-conversion, mapped git
 commits), and the files that were modified in that change.  A bit like

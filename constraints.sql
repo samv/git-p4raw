@@ -115,3 +115,69 @@ from
                 on (revcx.change = change.change)
         left join p4user
                 using (who_user);
+
+create view revcx_integed
+as
+select
+	-- basic stuff
+	r.change,
+	r.depotpath,
+	r.revision,
+	r.change_type,
+	rev_blobs.blobid,
+	rev.file_type,
+
+	-- any integration records for this change.
+	int_obj.subject as int_obj,
+	int_obj.int_type as int_obj_type,
+	int_obj.title as int_obj_title,
+
+	int_obj.object_minrev as int_obj_min,
+	int_obj.object_maxrev as int_obj_max,
+
+	int_obj.subject_minrev as int_subj_min,
+	int_obj.subject_maxrev as int_subj_max,
+
+	-- in order to detect cross-branch merging, we need to know
+        -- the previous change which affected the source of a
+        -- merged-in path
+	(select change
+	from	rev
+	where	depotpath = int_obj.subject and
+		change < int_subj_min.change
+	order by change desc
+	limit	1) as int_subj_prev_change,
+
+	int_subj_min.change as int_subj_min_change,
+	int_subj_max.change as int_subj_max_change,
+
+	(select change
+	from	rev
+	where	depotpath = int_obj.subject and
+		change > int_subj_max.change
+	order by change desc
+	limit	1) as int_subj_next_change
+
+from
+	revcx r
+	left join rev
+		using (depotpath, revision)
+	left join rev_blobs
+		using (depotpath, revision)
+	left join
+		(select
+			*
+		from
+			integed
+			inner join int_type
+				using (int_type)
+		) int_obj
+		on (r.depotpath = int_obj.object and
+			int_obj.change = r.change)
+	left join rev int_subj_min
+		on (int_subj_min.depotpath    = int_obj.subject  and
+			int_subj_min.revision = int_obj.subject_minrev)
+	left join rev int_subj_max
+		on (int_subj_max.depotpath    = int_obj.subject  and
+			int_subj_max.revision = int_obj.subject_maxrev);
+
