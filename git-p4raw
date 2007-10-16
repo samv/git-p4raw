@@ -684,7 +684,7 @@ sub do_describe {
 	my %desc_opts;
 	{
 		@ARGV = @_;
-		getopt(
+		getopt( "l" => \$desc_opts{long},
 		      );
 		@_ = @ARGV;
 	}
@@ -717,27 +717,22 @@ sub change_stats {
 		    );
 
 	my $csv;
-	my (%by_sb, %by_change_type, %paths, %by_path);
+	my (%paths, @revcxs);
 	my $output = $o->{output} || sub {
 		my $row = shift;
-		my $sb = "";
-		if ( $row->{int_obj} ) {
-			$row->{sb} = diff_right($row->{depotpath},
-						$row->{int_obj});
-		};
+
+		# try to figure out the branch root by looking for top
+		# level changes, or integrates from other paths.  Hope
+		# no integrations are happening between files with
+		# different names!
 		my $path = $row->{depotpath};
-		do {
-			$path =~ s{/[^/]*$}{};
-		} while ( $path and $path ne "/" and !exists $paths{$path} );
-
-		if ( !$path or $path eq "/" ) {
-			$path = $row->{depotpath};
-			$path =~ s{/[^/]+$}{};
-			$paths{$path}++;
+		$path =~ s{/[^/]*$}{};
+		if ( $row->{int_obj} ) {
+			$path = diff_right($row->{int_obj},
+					   $row->{depotpath});
 		}
-
-		push @{ $by_path{$path} ||= [] },
-			$row;
+		$paths{$path}++;
+		push @revcxs, $row;
 	};
 
 	my $show_header = $o->{show_header} || sub {
@@ -753,29 +748,27 @@ sub change_stats {
 	};
 
 	my $finish = $o->{finish} || sub {
-		for my $path ( sort keys %by_path ) {
+		my (%by_path);
+		# eliminate the paths that shadow others.
+		my $path;
+		for $path ( sort { length($a) <=> length($b) }
+			       keys %paths ) {
+			next unless $paths{$path};
+			my @gonners = grep m{^\Q$path\E/}, keys %paths;
+			delete @paths{@gonners};
+		}
+		my $path_re = join("|",map{"\Q$_\E"} keys %paths);
+		for my $row (@revcxs ) {
+			($path) = ($row->{depotpath} =~ m{^($path_re)/})
+				or die "got confused.  depotpath = "
+					.("$row->{depotpath}, looking "
+					  ."for $path_re");
+			push @{ $by_path{$path} ||= [] },
+				$row;
+		};
+		for $path ( sort keys %by_path ) {
 			print "On path $path,\n";
-			for my $ct ( 0..4 ) {
-				my @ct = grep { $_->{change_type} == $ct }
-					@{$by_path{$path}};
-				my @sources = keys %{{
-					(map { ($_->{int_obj}
-						? (diff_right($_->{depotpath},
-							      $_->{int_obj})
-						   => 1)
-						: ()) }
-					 @ct)}};
-				if ( @ct ) {
-					print "\t";
-					print $ct[0]{change_title};
-					print " ";
-					if ( @sources ) {
-						print "srcs = @sources, ";
-					}
-					print scalar(@ct)," file(s)";
-					print "\n";
-				}
-			}
+			show_changes_detail($o, $path, @{$by_path{$path}});
 		}
 	};
 
@@ -807,13 +800,90 @@ from
 where
 	change = ?
 order by
-	length(depotpath) asc
+	depotpath
 SQL
 	$sth->execute($change);
 	while ( my $row = $sth->fetchrow_hashref ) {
 		$output->($row);
 	}
 	$finish->();
+}
+
+sub show_changes_detail {
+	my $o = shift;
+	my $path = shift;
+	for my $ct ( 0..4 ) {
+		my @ct = grep { $_->{change_type} == $ct } @_;
+
+		my %by_object_path;
+		for my $chg ( @ct ) {
+			my $op = "";
+			if ( $chg->{int_obj} ) {
+				$op = diff_right($chg->{depotpath},
+						 $chg->{int_obj});
+			}
+			push @{ $by_object_path{$op} ||= [] }, $chg;
+		}
+
+		for my $obj_path ( sort keys %by_object_path ) {
+			my $chgs = $by_object_path{$obj_path};
+			print "\t";
+			print $ct[0]{change_title};
+			print " ";
+			if ( $obj_path ) {
+				my %changes;
+				for ( @$chgs ) {
+					if ( !$_->{int_subj_next_change} or
+					     $_->{change} < $_->{int_subj_next_change} ) {
+						$changes{HEAD}++;
+					}
+					else {
+						$changes{$_->{int_subj_max_change}}++;
+					}
+				}
+				print "from $obj_path ("
+					.join(",",sort { 0+$a<=>0+$b} keys %changes)."), ";
+			}
+			print scalar(@$chgs)," file(s)";
+			print "\n";
+			if ( $o->{long} ) {
+				for my $c ( @$chgs ) {
+					show_chg($o, $path, $c);
+				}
+			}
+		}
+	}
+}
+
+sub show_chg {
+	my $o = shift;
+	my $path = shift;
+	my $chg = shift;
+
+	print "\t\t";
+	my $filename = substr $chg->{depotpath}, length $path;
+	if ( $chg->{int_title} ) {
+		my $odr = _p4_disp_rev
+			($chg->{int_obj_min}, $chg->{int_obj_max});
+		my $sdr = _p4_disp_rev
+			($chg->{int_subj_min}, $chg->{int_subj_max});
+		if ( $sdr =~ m{,} ) {
+			$sdr .= " ($chg->{int_subj_min_change},"
+				."$chg->{int_subj_max_change})";
+		}
+		else {
+			$sdr .= " ($chg->{int_subj_max_change})";
+		}
+		if ( !$chg->{int_subj_next_change} or
+		     $chg->{change} < $chg->{int_subj_next_change} ) {
+			$sdr .= "(HEAD)";
+		}
+
+		print "...$filename: $sdr $chg->{int_title} $odr\n";
+	}
+	else {
+		print "...$filename\n";
+	}
 }
 
 sub diff_right {
@@ -1119,15 +1189,34 @@ commit ID.  Currently this only looks at information in the database.
 
 =item C<git-p4raw describe N>
 
-(incomplete)
-
-Show change N vital statistics (and, post-conversion, mapped git
+Show change N vital statistics (TODO: post-conversion, mapped git
 commits), and the files that were modified in that change.  A bit like
 C<p4 describe -s> or C<git show --stat>.
 
 This command performs a fairly mammoth query to determine whether
 changes with lots of "integrate" changes look enough like a
-cross-merge to be represented as such.
+cross-merge to be represented as such.  This works by looking at the
+revisions of the source paths for 'integrate' changes, and then
+finding out if any of those paths have new revisions between the one
+that was 'integrated' and the change number in question.  It then
+lists the change numbers that the revisions being integrated came
+from, or "HEAD" if that was the most recent revision on that branch at
+that time.  Thus, if you see output like this:
+
+ On path //depot/perl,
+         delete from //depot/relperl (HEAD), 27 file(s)
+         branch from //depot/relperl (HEAD), 291 file(s)
+         integrate from //depot/relperl (HEAD), 392 file(s)
+
+Then the integration information does not contradict the assertion
+that the change in question is a cross-merge from F<//depot/relperl>
+to F<//depot/perl>.
+
+However, this is not yet quite enough to prove that the integration
+information in the change is a cross-merge; we also need to show that
+there are changes between the I<merge base> of the two branches that
+could have been merged, but are not mentioned.  That half of the
+equation is currently TODO.
 
 =item C<git-p4raw integrated DEPOTPATH>
 
