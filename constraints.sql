@@ -138,19 +138,12 @@ select
 	int_obj.subject_minrev as int_subj_min,
 	int_obj.subject_maxrev as int_subj_max,
 
-	-- in order to detect cross-branch merging, we need to know
-        -- the previous change which affected the source of a
-        -- merged-in path
-	(select change
-	from	rev
-	where	depotpath = int_obj.subject and
-		change < int_subj_min.change
-	order by change desc
-	limit	1) as int_subj_prev_change,
-
 	int_subj_min.change as int_subj_min_change,
 	int_subj_max.change as int_subj_max_change,
 
+	-- in order to detect cross-branch merging, we need to know
+        -- the latest change which affected the source of a
+        -- merged-in path
 	(select change
 	from	rev
 	where	depotpath = int_obj.subject and
