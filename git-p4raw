@@ -705,17 +705,6 @@ sub change_stats {
 	my $change = shift;
 	my $o = shift;
 
-	my @cols = qw( change depotpath revision
-		       change_type blobid file_type
-		       int_obj int_obj_type
-		       int_obj_title
-		       int_obj_min int_obj_max
-		       int_subj_min int_subj_max
-		       int_subj_prev_change
-		       int_subj_min_change int_subj_max_change
-		       int_subj_next_change
-		    );
-
 	my $csv;
 	my (%paths, @revcxs);
 	my $output = $o->{output} || sub {
