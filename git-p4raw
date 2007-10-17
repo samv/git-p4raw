@@ -4,7 +4,7 @@ use strict vars, subs;
 use warnings;
 use Scriptalicious;
 use FindBin qw($Bin);
-use List::Util qw(sum);
+use List::Util qw(sum max);
 use Scalar::Util qw(looks_like_number);
 use Data::Dumper;
 use DBI;
@@ -821,17 +821,16 @@ sub show_changes_detail {
 			print " ";
 			if ( $obj_path ) {
 				my %changes;
-				for ( @$chgs ) {
-					if ( !$_->{int_subj_next_change} or
-					     $_->{change} < $_->{int_subj_next_change} ) {
-						$changes{HEAD}++;
-					}
-					else {
-						$changes{$_->{int_subj_max_change}}++;
-					}
-				}
+				my $headrev =
+					!(grep {
+						!$_->{int_subj_headrev}
+					} @$chgs);
+				my $change =
+					max map {
+						$_->{int_subj_max_change}
+					} @$chgs;
 				print "from $obj_path ("
-					.join(",",sort { 0+$a<=>0+$b} keys %changes)."), ";
+					.($headrev?"head":$change)."), ";
 			}
 			print scalar(@$chgs)," file(s)";
 			print "\n";
@@ -863,8 +862,7 @@ sub show_chg {
 		else {
 			$sdr .= " ($chg->{int_subj_max_change})";
 		}
-		if ( !$chg->{int_subj_next_change} or
-		     $chg->{change} < $chg->{int_subj_next_change} ) {
+		if ( $chg->{int_subj_headrev} ) {
 			$sdr .= "(HEAD)";
 		}
 

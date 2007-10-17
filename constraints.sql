@@ -116,7 +116,7 @@ from
         left join p4user
                 using (who_user);
 
-create view revcx_integed
+create or replace view revcx_integed
 as
 select
 	-- basic stuff
@@ -144,12 +144,13 @@ select
 	-- in order to detect cross-branch merging, we need to know
         -- the latest change which affected the source of a
         -- merged-in path
-	(select change
-	from	rev
-	where	depotpath = int_obj.subject and
-		change > int_subj_max.change
-	order by change desc
-	limit	1) as int_subj_next_change
+	not exists
+		(select change
+		 from	rev
+		 where	depotpath = int_obj.subject and
+			rev.change > int_subj_max.change and
+			rev.change <= r.change
+		) as int_subj_headrev
 
 from
 	revcx r
