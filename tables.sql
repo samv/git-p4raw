@@ -144,11 +144,29 @@ create table branches (
        revision INT null
 );
 
--- mapping changes to commit ID(s) - changes can affect multiple branches!
-create table change_commits (
+-- grafts they wanted
+create table grafts (
+	graft_change int not null,
+	graft_branch TEXT not null,
+
+	parent_change int null,
+	parent_branch TEXT null,
+	ref TEXT null,
+	CHECK (
+		((parent_change is not null and parent_branch is not null) AND
+	   		(ref is null))
+	OR	((parent_change is null and parent_branch is null) AND
+	   	(ref is not null))
+	)
+);
+
+-- mapping changes to branches and marks
+create sequence gfi_mark;
+create table change_marks (
 	branchpath TEXT not null,
 	change int not null,
 	primary key (branchpath, change),
 	treeid char(40) not null,
-	commitid char(40) not null
+	mark int not null,
+	unique (mark)
 );

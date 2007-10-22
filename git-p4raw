@@ -44,8 +44,8 @@ sub do_drop {
 	my $dbh = shift;
 	open SQL, "<$SHARE/tables.sql" or die $!;
 	my $statements = join ";\n", reverse
-		map { m{create table (\S+)} ? ("drop table $1") : () }
-			<SQL>;
+		map { (m{create (table|sequence) (\S+)}
+		       ? ("drop $1 $2") : ()) } <SQL>;
 	close SQL;
 	mutter "Running: $statements";
 	$dbh->begin_work;

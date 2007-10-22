@@ -6,7 +6,10 @@ alter table rev add constraint rev_change_valid
 alter table revcx add constraint revcx_change_valid
       foreign key (change) references change;
 
-alter table change_commits add constraint change_commits_change_valid
+alter table change_marks add constraint change_marks_change_valid
+      foreign key (change) references change;
+
+alter table grafts add constraint grafts_change_valid
       foreign key (change) references change;
 
 -- checking all change description references are unique
@@ -23,10 +26,10 @@ alter table rev_blobs add constraint rev_blobs_depot_rev_valid
       foreign key (depotpath,revision) references rev;
 
 -- set up safety constraints for later additions
-alter table change_commits add constraint change_commits_branch_valid
+alter table change_marks add constraint change_marks_branch_valid
       foreign key (branchpath) references branches;
-alter table branches add constraint change_commits_branchpoint_valid
-      foreign key(sourcebranch,revision) references change_commits(branchpath, change);
+alter table branches add constraint change_marks_branchpoint_valid
+      foreign key(sourcebranch,revision) references change_marks(branchpath, change);
 
 -- create indexes
 create index integed_change_idx on integed (change);
@@ -174,4 +177,3 @@ from
 	left join rev int_subj_max
 		on (int_subj_max.depotpath    = int_obj.subject  and
 			int_subj_max.revision = int_obj.subject_maxrev);
-
