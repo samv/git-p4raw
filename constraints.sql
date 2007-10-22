@@ -10,7 +10,10 @@ alter table change_marks add constraint change_marks_change_valid
       foreign key (change) references change;
 
 alter table grafts add constraint grafts_change_valid
-      foreign key (change) references change;
+      foreign key (graft_change) references change (change);
+
+alter table grafts add constraint grafts_change_valid
+      foreign key (parent_change) references change (change);
 
 -- checking all change description references are unique
 create unique index change_desc_idx on change(change_desc_id);
@@ -36,7 +39,7 @@ create index integed_change_idx on integed (change);
 create index integed_subject_idx on integed (subject, subject_maxrev);
 create index integed_object_idx on integed (object, object_maxrev);
 create index rev_rcs_file on rev(rcs_file, rcs_revision);
-create index change_commits_chg_idx on change_commits(change);
+create index change_marks_chg_idx on change_marks(change);
 
 -- these users made changes, but don't exist in the users table:
 -- FOUND: add_p4users
