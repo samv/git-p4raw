@@ -1069,7 +1069,7 @@ __END__
 
 =head1 NAME
 
-git-p4raw - git-fast-import exporter for RAW perforce repositories
+git-p4raw - git fast-import exporter for RAW perforce repositories
 
 =head1 SYNOPSIS
 
@@ -1133,36 +1133,95 @@ process going on.
 
 =head1 COMMANDS
 
+=head2 IMPORT OPERATION
+
+=over
+
+=item C<git-p4raw init>
+
 The first command, C<init>, initialises the database tables and git
-repository.  C<drop> can be used to drop all database tables and
-destroy the git repository, in a somewhat molly-guarded fashion.
+repository.
+
+=item C<git-p4raw drop>
+
+C<drop> can be used to drop all database tables and destroy the git
+repository, in a somewhat molly-guarded fashion.
+
+=item C<git-p4raw load [filename...]>
 
 The second command, C<load>, loads all of the Perforce data from the
 C<checkpoint.NNN.gz> and C<journal> files which it expects to find in
-the current directory (the root of the Perforce import).
+the current directory (the root of the Perforce import).  You can
+optionally specify which files to load from.
 
-The third command, C<check>, adds constraints to the database schema.
-If any of these constraints fail, you should investigate what is going
-on and correct the data before proceeding, as the code probably makes
-assumptions that these constraints hold.  This command may ask
-questions, the answers to which will be written to a file called
-C<p4raw-extra> in the Perforce checkpoint format (and automatically
-re-loaded if you run C<load> again).  Already added constraints will
-not be re-added. (TODO - some inconsistencies such as missing
-integration records are not dealt with, and need to be handled
-manually)
+=item C<git-p4raw check>
+
+This third command, C<check>, adds constraints to the database schema
+and looks for errant data conditions.
+
+If any of these constraints fail, and don't prompt to correct the data
+to your satisfaction, you should investigate what is going on and
+correct the data before proceeding.  The code makes assumptions that
+these constraints hold.
+
+When the command asks questions, the answers will be written to a file
+called C<p4raw-extra-x.asv> in the Perforce checkpoint format (and
+automatically re-loaded if you run C<load> again without arguments).
+
+(TODO - some inconsistencies such as missing integration records are
+not dealt with, and may require manual patching or use of the C<graft>
+command, below)
+
+=item C<git-p4raw graft { -d change | [ -a ] change change ... }> (TODO)
 
 The C<graft> command is optional, and is principally for those who
-want to override the decisions that this tool makes (and can be shown
-ahead of time using the C<describe> sub-command, see below).
+want to override the decisions that this tool makes (and modifies what
+is shown ahead of time using the C<describe> sub-command, see below).
 
-Finally, C<import> will perform the final step of exporting commits to
-git, using C<git-fast-import> (TODO - prototype finished, but will be
-brought into this branch more tidily).
+If you just specify two change numbers, then the detected branch paths
+for those changes is used.  Bear in mind that this detection will
+frequently be wrong, unless you already have a partial conversion
+underway.
 
-These other commands are also planned, to show information from the
-database.  Many of these commands closely correspond to their C<p4>
-counterparts, though some are unique to this tool.
+When grafts are specified, they I<replace> the detected parents
+completely.  Use C<-a> to add to the detected/already configured
+parents.
+
+To get around this, specify your grafting with the path as well, eg:
+
+   git-p4raw -a //depot/perl@18 //depot/ansiperl@17
+
+This would say that the branch at C<//depot/ansiperl> change 17 should
+be added to the parents of C<//depot/perl> change 18.
+
+If a "change" parses as a git commit ID via C<git rev-parse>, it is
+treated as external to the data being imported.  Do B<not> use commit
+IDs or references from previous import runs here!
+
+The C<-d> option will reset existing grafts for a change.
+
+This command dumps all of the configured changes to the file
+F<p4raw-extra-grafts.asv> on completion, so that it can be re-loaded
+should a subsequent C<git-p4raw drop> happen.  The data in this table
+is unable to be checked for integrity at C<git-p4raw check> time.
+
+=item C<git-p4raw export [ CHG[..CHG] | -n NUM ]> (TODO)
+
+Export a bunch of changes, either bounded by a range of revisions or
+the next NUM revisions, to a C<git fast-import> process.  If this
+command is started with standard output as a terminal, it will start
+C<git fast-import> itself.
+
+If you start C<git fast-import>, you must take care to pass
+C<--export-marks> to it if you want to perform subsequent import runs.
+
+=back
+
+=head2 INFORMATIONAL COMMANDS
+
+These other commands are also mostly implemented, to show information
+from the database.  Many of these commands closely correspond to their
+C<p4> counterparts, though some are unique to this tool.
 
 =over
 
