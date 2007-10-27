@@ -129,12 +129,25 @@ create table label (
        revision int NOT NULL       
 );
 
--- mapping revisions to blob ID, or "0" x 40 if deleted
-create table rev_blobs (
+-- this table holds the marks that we send to git fast-import
+create sequence gfi_mark;
+create table marks (
+	mark int not null primary key,
+	commitid char(40) null,
+	blobid char(40) null,
+	CHECK (
+		(commitid is not null) OR
+		(blobid is not null)
+	)
+);
+
+-- mapping file revisions to marks - join with marks to get blobid's
+create table rev_marks (
 	depotpath TEXT not null,
 	revision int not null,
 	primary key (depotpath,revision),
-	blobid char(40) not null
+	mark int not null references marks DEFERRABLE INITIALLY DEFERRED,
+	unique (mark)
 );
 
 -- what branches we determined exist along the way
@@ -161,12 +174,11 @@ create table grafts (
 );
 
 -- mapping changes to branches and marks
-create sequence gfi_mark;
 create table change_marks (
 	branchpath TEXT not null,
 	change int not null,
 	primary key (branchpath, change),
-	treeid char(40) not null,
-	mark int not null,
+	mark int not null references marks DEFERRABLE INITIALLY DEFERRED,
 	unique (mark)
 );
+

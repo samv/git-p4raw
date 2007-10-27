@@ -343,12 +343,13 @@ sub show_p4_change {
 
 	my $query = $dbh->prepare(<<SQL);
 select
-	change,
-	branchpath
+	cm.change,
+	cm.branchpath
 from
-	change_commits
+	change_marks cm
+	inner join marks m using (mark)
 where
-	commitid = ?
+	m.commitid = ?
 SQL
 	$query->execute($git_rev);
 	my $x = $query->fetchrow_hashref;
@@ -380,12 +381,13 @@ sub show_git_paths {
 
 	my $query = $dbh->prepare(<<SQL);
 select
-	commitid,
-	branchpath
+	m.commitid,
+	cm.branchpath
 from
-	change_commits
+	change_marks cm
+	inner join marks m using (mark)
 where
-	change = ?
+	cm.change = ?
 SQL
 	$query->execute($change);
 	my @d;
