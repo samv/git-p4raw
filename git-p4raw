@@ -12,6 +12,7 @@ use Cwd;
 use IO::Handle;
 use File::Path qw(rmtree);
 use Fatal qw(:void open);
+use Digest::SHA1;
 
 use vars qw($SHARE $SCRIPT_MODE);
 $SHARE = $Bin;
@@ -998,6 +999,15 @@ SQL
 	while ( my $row = $sth->fetchrow_hashref ) {
 		$output->($row);
 	}
+}
+
+sub sha1_blob_ref {
+	my $data_ref = shift;
+	my $sha1 = Digest::SHA1->new;
+	my $l = length($$data_ref);
+	$sha1->add("blob $l\0");
+	$sha1->add($$data_ref);
+	return lc($sha1->hexdigest);
 }
 
 sub do_blobs {
