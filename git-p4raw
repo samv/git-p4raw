@@ -1002,6 +1002,17 @@ SQL
 	}
 }
 
+sub max_change {
+	my $dbh = shift;
+	my ($change) = map { @$_ } @{ $dbh->selectall_arrayref(<<SQL) };
+select
+	max(change)
+from
+	change
+SQL
+	return $change;
+}
+
 sub sha1_blob_ref {
 	my $data_ref = shift;
 	my $sha1 = Digest::SHA1->new;
