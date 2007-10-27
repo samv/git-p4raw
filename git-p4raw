@@ -1013,6 +1013,111 @@ SQL
 	return $change;
 }
 
+sub get_rcs {
+	my $rcs_file = shift;
+	my $rcs_revision = shift;
+	return undef if !$rcs_file;
+	$rcs_file =~ s{^//}{};
+	my $cmd;
+	if ( -f "$rcs_file,d/$rcs_revision" ) {
+		$cmd = "cat '$rcs_file,d/$rcs_revision'";
+	}
+	elsif ( -f "$rcs_file,d/$rcs_revision.gz" ) {
+		$cmd = "zcat '$rcs_file,d/$rcs_revision'";
+	}
+	else {
+		$cmd = "co -q -p$rcs_revision -kb '$rcs_file'";
+	}
+	scalar capture $cmd;
+}
+
+sub do_print {
+	my $dbh = shift;
+	my %print_opts;
+	{
+		@ARGV = @_;
+		getopt("Q" => \$print_opts{quiet},
+		       "c=i" => \$print_opts{change},
+		       "a" => \$print_opts{all},
+		      );
+		@_ = @ARGV;
+	}
+
+	my $pathspec = shift;
+	my ($depotpath, $rev)
+		= ($pathspec =~ m{^(.*?)(?:#(\d+))?$})
+			if $pathspec;
+
+	show_file($dbh, $depotpath, $rev, \%print_opts);
+}
+
+sub show_file {
+	my $dbh = shift;
+	my $depotpath = shift;
+	my $rev = shift;
+	my $o = shift;
+	my $change = $o->{change};
+
+	if ( !$rev ) {
+		$change ||= max_change($dbh);
+	}
+
+	my @where;
+	my @pl;
+
+	push @where, "depotpath = ?";
+	push @pl, $depotpath;
+
+	if ( !$rev ) {
+		push @where, "change <= ?";
+		push @pl, $change;
+	}
+	else {
+		push @where, "revision = ?";
+		push @pl, $rev;
+	}
+
+	my $where = join " and ", @where;
+	my $limit = ($o->{all} ? "" : "limit 1");
+	my $sth = $dbh->prepare(<<SQL);
+select
+	revision,
+	rev_change_type,
+	change,
+	ct.title as change_title,
+	file_type,
+	rcs_file,
+	rcs_revision
+from
+	rev
+	inner join change_type ct
+		on (ct.change_type = rev.rev_change_type)
+where
+	$where
+order by
+	revision desc
+$limit
+SQL
+	$sth->execute(@pl);
+	my $output = $o->{output} || sub {
+		my $row = shift;
+		unless ( $o->{quiet} ) {
+			print "$depotpath#$row->{revision} - "
+				.("$row->{change_title} change "
+				  .$row->{change}." ("._p4_type($row->{file_type})
+				  .")\n");
+		}
+		my $file_data = get_rcs($row->{rcs_file},
+					$row->{rcs_revision});
+		binmode STDOUT, ":raw";
+		print $file_data;
+	};
+	while ( my $row = $sth->fetchrow_hashref ) {
+		$output->($row);
+	}
+	$sth->finish;
+}
+
 sub sha1_blob_ref {
 	my $data_ref = shift;
 	my $sha1 = Digest::SHA1->new;
@@ -1323,6 +1428,21 @@ where the change was picked from another change with modifications.
 However, there I<will> be a note in the changelog that the file was
 picked when using C<git-log>, and as a last resort there is always
 this command.
+
+=item C<git-p4raw print [ -c CHANGE ] [ -Q ] [ -a ] file[rev]>
+
+Prints the contents of a Perforce file at a particular revision.
+C<-q> is a standard Scriptalicious switch, so suppress the header with
+C<-Q>.
+
+Currently this command does not vary its output like C<p4 print> does
+based on the filetype, to add trailing linefeeds and the like, perform
+CR/LF conversion or keyword expansion.
+
+You can print all versions of the file with C<-a> as in Perforce, but
+revision selectors are still TODO.
+
+Specify a change number with C<-c NUM>.
 
 =item C<git-p4raw annotate file[revRange]> (TODO)
 
