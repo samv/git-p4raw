@@ -1118,6 +1118,32 @@ SQL
 	$sth->finish;
 }
 
+sub do_ls_tree {
+	my $dbh = shift;
+	my %ls_tree_opts;
+	{
+		@ARGV = @_;
+		getopt("l" => \$ls_tree_opts{length},
+		       "b" => \$ls_tree_opts{blob},
+		       "r" => \$ls_tree_opts{recurse},
+		       "name-only" => \$ls_tree_opts{name_only},
+		       "abbrev=i" => \$ls_tree_opts{abbrev},
+		      );
+		@_ = @ARGV;
+	}
+
+	my $pathspec = shift;
+	my ($depotpath, $change)
+		= ($pathspec =~ m{^(.*?)(?:@(\d+))?$})
+			if $pathspec;
+	if ( @_ or !$depotpath ) {
+		abort "expected depot path/change (only)";
+	}
+	$change ||= max_change($dbh);
+
+	show_files($dbh, $depotpath, $change, \%ls_tree_opts);
+}
+
 sub sha1_blob_ref {
 	my $data_ref = shift;
 	my $sha1 = Digest::SHA1->new;
@@ -1125,6 +1151,92 @@ sub sha1_blob_ref {
 	$sha1->add("blob $l\0");
 	$sha1->add($$data_ref);
 	return lc($sha1->hexdigest);
+}
+
+sub show_files {
+	my $dbh = shift;
+	my $path = shift;
+	my $change = shift;
+	my $o = shift;
+
+	my $output = $o->{output} ||= sub {
+		my $row = shift;
+		(my $relative = $row->{depotpath})
+			=~ s{^\Q$path\E/?}{};
+		if ( $o->{name_only} ) {
+			print "$relative\n";
+		}
+		else {
+			my ($l, $b);
+			$b = $row->{blobid};
+			if ( $o->{length} or
+			     ($o->{blob} and !$row->{blobid}) ) {
+				my $blob_data =
+					get_rcs($row->{rcs_file},
+						$row->{rcs_revision});
+				if ( $o->{length} ) {
+					$l = length $blob_data;
+				}
+				if ( $o->{blob} ) {
+					# pass by ref only needed on
+					# perl <5.8.1
+					$b = sha1_blob_ref(\$blob_data);
+				}
+			}
+			my $a = $o->{abbrev} || 40;
+			# don't show trees yet
+			printf( "%6o %s %s".($o->{length}?" %7d":"")
+				."\t%s\n",
+				($row->{file_type} & P4_TYPE_EXEC
+				 ? 0100755 : 0100644),
+				"blob",
+				($o->{blob}
+				 ? substr($b,0,$a)
+				 : substr($row->{revision_md5},0,$a)),
+				($o->{length} ? ($l) : ()),
+				$relative);
+		}
+	};
+
+	my (@where, @pl);
+
+	push @where, "change = ?";
+	push @pl, $change;
+
+	if ( $o->{recurse} ) {
+		push @where, 'depotpath like ?';
+		push @pl, "$path/%";
+	}
+	else {
+		push @where, 'depotpath ~ ?';
+		push @pl, "$path(/[^/]*)?\$";
+	}
+
+	my $join_clause = "";
+	if ($o->{blob}) {
+		$join_clause = <<SQL;
+	left join rev_blobs
+		using (depotpath, revision)
+SQL
+	}
+
+	my $where = join " and ", @where;
+	my $sth = $dbh->prepare(<<SQL);
+select
+	*
+from
+	change_state cs
+$join_clause
+where
+	$where
+order by
+	depotpath asc
+SQL
+	$sth->execute(@pl);
+
+	while ( my $row = $sth->fetchrow_hashref ) {
+		$output->($row);
+	}
 }
 
 sub do_blobs {
@@ -1443,6 +1555,11 @@ You can print all versions of the file with C<-a> as in Perforce, but
 revision selectors are still TODO.
 
 Specify a change number with C<-c NUM>.
+
+=item C<git-p4raw ls-tree branch[@CHANGE]>
+
+Show the contents of a particular Perforce path at particular
+change.  Defaults to the latest change.
 
 =item C<git-p4raw annotate file[revRange]> (TODO)
 

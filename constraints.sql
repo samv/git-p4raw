@@ -180,3 +180,27 @@ from
 	left join rev int_subj_max
 		on (int_subj_max.depotpath    = int_obj.subject  and
 			int_subj_max.revision = int_obj.subject_maxrev);
+
+-- this view will return the contents of a change
+create or replace view change_state
+as
+select
+	c.change,
+	r.depotpath,
+	r.revision,
+	r.change as last_change,
+	r.file_type,
+	r.revision_md5,
+        r.rcs_file,
+        r.rcs_revision
+from
+	change c,
+	rev r
+where
+	r.change <= c.change AND
+	not exists (select * from rev r2
+	    	    where r2.revision > r.revision
+		    and r2.change <= c.change
+	    	    and r.depotpath = r2.depotpath) AND
+	r.revision_md5 != '00000000000000000000000000000000'
+
