@@ -457,6 +457,7 @@ sub _p4_disp_rev {
 # didn't try very hard to understand the layout or make this function
 # very clever, I just cared about the types I saw in my own test
 # repository.
+use constant P4_TYPE_EXEC => 0b10_0000_0000;
 sub _p4_type {
 	my $type = shift;
 	my @supp;
@@ -468,7 +469,7 @@ sub _p4_type {
 		($type ==              0 ? "text"     :
 		$type ==   0b1_0000_0011 ? "binary"   :
 		$type ==   0b1_0000_0001 ? "ubinary"  :
-		$type ==  0b10_0000_0000 ? "xtext"    :
+		$type ==    P4_TYPE_EXEC ? "xtext"    :
 		$type ==  0b00_0010_0000 ? "ktext"    :
 		$type ==  0b10_0010_0000 ? "kxtext"   :
 		$type ==  0b01_0000_0000 ? "binary+D" :
