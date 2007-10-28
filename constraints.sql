@@ -6,14 +6,8 @@ alter table rev add constraint rev_change_valid
 alter table revcx add constraint revcx_change_valid
       foreign key (change) references change;
 
-alter table change_marks add constraint change_marks_change_valid
+alter table change_branches add constraint change_branches_change_valid
       foreign key (change) references change;
-
-alter table grafts add constraint grafts_change_valid
-      foreign key (graft_change) references change (change);
-
-alter table grafts add constraint grafts_change_valid
-      foreign key (parent_change) references change (change);
 
 -- checking all change description references are unique
 create unique index change_desc_idx on change(change_desc_id);
@@ -25,14 +19,19 @@ select * from change_desc where not exists
 -- checking all depotpaths + revnums are valid
 alter table revcx add constraint revcx_depot_rev_valid
       foreign key (depotpath, revision) references rev;
-alter table rev_blobs add constraint rev_blobs_depot_rev_valid
+alter table rev_marks add constraint rev_marks_depot_rev_valid
       foreign key (depotpath,revision) references rev;
 
 -- set up safety constraints for later additions
 alter table change_marks add constraint change_marks_branch_valid
-      foreign key (branchpath) references branches;
-alter table branches add constraint change_marks_branchpoint_valid
-      foreign key(sourcebranch,revision) references change_marks(branchpath, change);
+      foreign key (branchpath,change) references change_branches;
+
+alter table change_parents add constraint change_branchpath_valid
+      foreign key (branchpath,change)
+      references change_branches;
+alter table change_parents add constraint change_parents_valid
+      foreign key (parent_branchpath, parent_change)
+      references change_branches(branchpath, change);
 
 -- create indexes
 create index integed_change_idx on integed (change);
@@ -40,6 +39,7 @@ create index integed_subject_idx on integed (subject, subject_maxrev);
 create index integed_object_idx on integed (object, object_maxrev);
 create index rev_rcs_file on rev(rcs_file, rcs_revision);
 create index change_marks_chg_idx on change_marks(change);
+create index change_parents_idx on change_parents(branchpath, change);
 
 -- these users made changes, but don't exist in the users table:
 -- FOUND: add_p4users
@@ -130,7 +130,8 @@ select
 	r.depotpath,
 	r.revision,
 	r.change_type,
-	rev_blobs.blobid,
+	rev_marks.mark,
+	marks.blobid,
 	rev.file_type,
 
 	-- any integration records for this change.
@@ -162,8 +163,10 @@ from
 	revcx r
 	left join rev
 		using (depotpath, revision)
-	left join rev_blobs
+	left join rev_marks
 		using (depotpath, revision)
+	left join marks
+		using (mark)
 	left join
 		(select
 			*

@@ -141,7 +141,7 @@ create table marks (
 	)
 );
 
--- mapping file revisions to marks - join with marks to get blobid's
+-- mapping file revisions to marks - join with marks to get blobids
 create table rev_marks (
 	depotpath TEXT not null,
 	revision int not null,
@@ -151,29 +151,14 @@ create table rev_marks (
 );
 
 -- what branches we determined exist along the way
-create table branches (
-       branchpath TEXT not null primary key,
-       sourcebranch TEXT null,
-       revision INT null
+create table change_branches (
+       branchpath TEXT not null,
+       change INT null,
+       primary key (branchpath, change)
 );
 
--- grafts they wanted
-create table grafts (
-	graft_change int not null,
-	graft_branch TEXT not null,
-
-	parent_change int null,
-	parent_branch TEXT null,
-	ref TEXT null,
-	CHECK (
-		((parent_change is not null and parent_branch is not null) AND
-	   		(ref is null))
-	OR	((parent_change is null and parent_branch is null) AND
-	   	(ref is not null))
-	)
-);
-
--- mapping changes to branches and marks
+-- mapping changes to branches and marks - join with marks to get
+-- commitids
 create table change_marks (
 	branchpath TEXT not null,
 	change int not null,
@@ -182,3 +167,23 @@ create table change_marks (
 	unique (mark)
 );
 
+-- parentage of changes
+create table change_parents (
+	branchpath TEXT not null,
+	change int not null,
+
+	parent_branchpath TEXT null,
+	parent_change int null,
+
+	ref TEXT null,
+	manual boolean,
+
+	CHECK (
+		((parent_change is not null and parent_branchpath is not null)
+		 AND
+		 (ref is null))
+	OR	((parent_change is null and parent_branchpath is null)
+		 AND
+		 (ref is not null))
+	)
+);
