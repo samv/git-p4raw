@@ -38,6 +38,7 @@ create index integed_change_idx on integed (change);
 create index integed_subject_idx on integed (subject, subject_maxrev);
 create index integed_object_idx on integed (object, object_maxrev);
 create index rev_rcs_file on rev(rcs_file, rcs_revision);
+create index rev_change on rev(change);
 create index change_marks_chg_idx on change_marks(change);
 create index change_parents_idx on change_parents(branchpath, change);
 
