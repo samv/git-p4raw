@@ -96,6 +96,26 @@ where
 order by
 	r.change;
 
+-- all revisions which are of type 'delete' should have revision MD5
+-- of 0000..0000.  These ones don't:
+select
+	*
+from
+	rev
+where
+	rev_change_type = 2 and
+	revision_md5 != '00000000000000000000000000000000';
+
+-- all revisions should be MD5 checksummed.  This many aren't:
+-- ONEROW
+select
+	count(*) as count_no_md5
+from
+	rev
+where
+	rev_change_type != 2 and
+	revision_md5 = '00000000000000000000000000000000';
+
 -- create some views that are used by later methods
 create view revcx_path
 as

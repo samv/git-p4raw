@@ -243,6 +243,7 @@ sub do_check {
 	my $constraints = join "", <SQL>;
 	close SQL;
 	my $do_this;
+	my $one_row;
 
 	while ( $constraints =~ m{\G(?: ( \s* --(?-s:.*)
 					  (?: \n\s*--(?-s:.*) )* )
@@ -250,11 +251,17 @@ sub do_check {
 		my ($comment, $sql) = ($1, $2);
 		if ( $comment ) {
 			$comment =~ s{^\s*--\s*}{}mg;
-			if ( $comment =~ s{^FOUND: (.*)}{}ms ) {
+			if ( $comment =~ s{^FOUND: ((?-s:.*))\n}{}ms ) {
 				$do_this = $1;
 			}
 			else {
 				undef($do_this);
+			}
+			if ( $comment =~ s{^ONEROW(?-s:.*)\n}{}ms ) {
+				$one_row = 1;
+			}
+			else {
+				undef($one_row);
 			}
 			say $comment;
 		}
@@ -265,7 +272,7 @@ sub do_check {
 				my $sth = $dbh->prepare($sql);
 				$sth->execute;
 				my $csv;
-				if ( $VERBOSE > 0 ) {
+				if ( $VERBOSE > 0 or $one_row ) {
 					$csv = Text::CSV_XS->new
 						({binary => 1,
 						  eol => "\n"});
@@ -284,9 +291,12 @@ sub do_check {
 					}
 					$rows++;
 				}
-				say "($rows rows".
-					($rows&&$VERBOSE==0?"; use -v to see them"
-					 :"").")";
+				if ( !$one_row ) {
+					say "($rows rows".
+						($rows&&$VERBOSE==0
+						 ?"; use -v to see them"
+						 :"").")";
+				}
 				if ( $do_this and $rows ) {
 					no strict 'refs';
 					my $statefile =
