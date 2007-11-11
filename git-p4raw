@@ -711,26 +711,11 @@ sub change_stats {
 	my $dbh = shift;
 	my $change = shift;
 	my $o = shift;
-
 	my $csv;
-	my (%paths, @revcxs);
-	my $output = $o->{output} || sub {
-		my $row = shift;
 
-		# try to figure out the branch root by looking for top
-		# level changes, or integrates from other paths.  Hope
-		# no integrations are happening between files with
-		# different names!
-		my $path = $row->{depotpath};
-		$path =~ s{/[^/]*$}{};
-		if ( $row->{int_obj} ) {
-			$path = diff_right($row->{int_obj},
-					   $row->{depotpath});
-		}
-		$paths{$path}++;
-		push @revcxs, $row;
-	};
-
+	# ok, so there are a few internal callbacks in this function.
+	# the first gets the description of the change - roughly
+	# change_desc
 	my $show_header = $o->{show_header} || sub {
 		my $d = shift;
 		print "Change $d->{change} by $d->{who_user}\@",
@@ -743,31 +728,53 @@ sub change_stats {
 		print "\n";
 	};
 
-	my $finish = $o->{finish} || sub {
-		my (%by_path);
-		# eliminate the paths that shadow others.
-		my $path;
-		for $path ( sort { length($a) <=> length($b) }
-			       keys %paths ) {
-			next unless $paths{$path};
-			my @gonners = grep m{^\Q$path\E/}, keys %paths;
-			delete @paths{@gonners};
-		}
-		my $path_re = join("|",map{"\Q$_\E"} keys %paths);
-		for my $row (@revcxs ) {
-			($path) = ($row->{depotpath} =~ m{^($path_re)/})
-				or die "got confused.  depotpath = "
-					.("$row->{depotpath}, looking "
-					  ."for $path_re");
-			push @{ $by_path{$path} ||= [] },
-				$row;
-		};
-		for $path ( sort keys %by_path ) {
-			print "On path $path,\n";
-			show_changes_detail($o, $path, @{$by_path{$path}});
-		}
+	# this one gets called with the list of branches
+	my %paths;
+	my $prepare_paths = sub {
+		my $row = shift;
+		$paths{$row->{branchpath}} = $row->{change};
+		$o->{prepare_path}->($row) if $o->{prepare_path};
 	};
 
+	# this one receives any pre-existing change_parents rows
+	my %parents;
+	my $change_parents = sub {
+		my $row = shift;
+		push @{ $parents{$row->{branchpath}} ||= [] }, $row;
+		$o->{change_parents}->($row) if $o->{change_parents};
+	};
+
+	# this one gets change_detail 'rows'
+	my $show_change_detail = $o->{show_change_detail} = sub {
+		my $path = shift;
+		my $details = shift;
+		if ( ! $o->{answers} ) {
+			print "On path $path,\n";
+		}
+		while (my ($change_title, $by_int_path)
+		       = each %$details) {
+			for my $int_path (sort keys %$by_int_path) {
+				my $c_d = $by_int_path->{$int_path};
+				print "\t", $change_title, " ";
+				if ( $int_path ) {
+					print "from $int_path ("
+						.($c_d->{int_headrev}
+						  ?"head":
+						  $c_d->{int_change})."), ";
+				}
+				print scalar(@{$c_d->{revcxs}})," file(s)";
+				print "\n";
+				if ( $o->{long} ) {
+					for my $c ( @{$c_d->{revcxs}} ) {
+						show_chg($o, $path, $c);
+					}
+				}
+			}
+		}
+		print "\n";
+	};
+
+	goto no_header if !ref $show_header;
 	my $sth = $dbh->prepare(<<SQL);
 select
 	*
@@ -779,74 +786,143 @@ where
 	change.change = ?
 SQL
 	$sth->execute($change);
-	$show_header->($sth->fetchrow_hashref);
+	my $row = $sth->fetchrow_hashref;
+	if ( !$row ) {
+		say "no such change $change";
+		return;
+	}
+	if ( !$row->{closed} ) {
+		moan "change $change was not closed";
+	}
+	$show_header->($row);
 	$sth->finish;
 
+no_header:
 	$sth = $dbh->prepare(<<SQL);
 select
 	*,
-        int_type.title as int_title,
 	change_type.title as change_title
 from
 	revcx_integed
 	inner join change_type
 		using (change_type)
-	left join int_type
-		on (int_obj_type = int_type)
 where
 	change = ?
 order by
 	depotpath
 SQL
 	$sth->execute($change);
+	my (@revcxs);
+
+	my $path_re;
+	my $add_path = sub {
+		if ( @_ ) {
+			if ( grep { (!$_[1] or defined $paths{$_[0]})
+					    and m{^\Q$_[0]\E/} } keys %paths ) {
+				return undef;
+			}
+			$paths{(shift)} ||= undef;
+		}
+		if ( keys %paths ) {
+			my $re = join("|",map{"\Q$_\E"} keys %paths);
+			$path_re = qr{$re};
+		}
+		else {
+			$path_re = qr{(?!.)};
+		}
+	};
+	$add_path->();
+
+	# now, set about grouping the revcx_integed stuff by branch,
+	# change type and integrated branch
 	while ( my $row = $sth->fetchrow_hashref ) {
-		$output->($row);
+		# try to figure out the branch root by looking for top
+		# level changes, or integrates from other paths.  Hope
+		# no integrations are happening between files with
+		# different names!
+		my $path = $row->{depotpath};
+		unless ( $path =~ m{^($path_re)/} ) {
+			# new path, add to paths
+			$path =~ s{/[^/]*$}{};
+			if ( $row->{int_obj} ) {
+				$path = diff_right($row->{int_obj},
+						   $row->{depotpath});
+				moan "using diff_right($row->{int_obj}, $row->{depotpath}) for change branch path (=$path)";
+			}
+			else {
+				mutter "adding new branchpath $path because I saw $path";
+			};
+			$add_path->($path, 1);
+		}
+		push @revcxs, $row;
+		$o->{revcxs}->($row, $path) if $o->{revcxs};
+	};
+
+	# paranoia - the above was a quick sweep only.  remove
+	my @gonners = grep { m{^($path_re)/} && !$paths{$_} }
+		keys %paths;
+	if ( @gonners ) {
+		moan "ignoring paths @gonners";
+		delete @paths{@gonners};
+		$add_path->();
 	}
-	$finish->();
-}
 
-sub show_changes_detail {
-	my $o = shift;
-	my $path = shift;
-	for my $ct ( 0..4 ) {
-		my @ct = grep { $_->{change_type} == $ct } @_;
-
-		my %by_object_path;
-		for my $chg ( @ct ) {
-			my $op = "";
-			if ( $chg->{int_obj} ) {
-				$op = diff_right($chg->{depotpath},
-						 $chg->{int_obj});
-			}
-			push @{ $by_object_path{$op} ||= [] }, $chg;
+	# ok, now group them by path, change type and integration branch
+	my (%by_path);
+	my @change_details;
+	for my $row ( @revcxs ) {
+		{ no warnings;
+		#whisper "row: $row->{depotpath} $row->{change_title} $row->{int_obj}";
+	  }
+		my ($path) = ($row->{depotpath} =~ m{^($path_re)/})
+			or die "got confused.  depotpath = "
+				.("$row->{depotpath}, looking "
+				  ."for $path_re");
+		my $op = "";
+		if ( $row->{int_obj} &&
+		     $row->{int_obj} =~ m{^($path_re)/} ) {
+			$op = $1;
 		}
-
-		for my $obj_path ( sort keys %by_object_path ) {
-			my $chgs = $by_object_path{$obj_path};
-			print "\t";
-			print $ct[0]{change_title};
-			print " ";
-			if ( $obj_path ) {
-				my %changes;
-				my $headrev =
-					!(grep {
-						!$_->{int_subj_headrev}
-					} @$chgs);
-				my $change =
-					max map {
-						$_->{int_subj_max_change}
-					} @$chgs;
-				print "from $obj_path ("
-					.($headrev?"head":$change)."), ";
-			}
-			print scalar(@$chgs)," file(s)";
-			print "\n";
-			if ( $o->{long} ) {
-				for my $c ( @$chgs ) {
-					show_chg($o, $path, $c);
-				}
-			}
+		elsif ( $row->{int_obj} ) {
+			$op = diff_right($row->{depotpath},
+					 $row->{int_obj});
+			moan "using diff_right($row->{depotpath}, $row->{int_obj}) for integration branchpath (=$op)";
+			while ( !$add_path->($op) ) {
+				($op) = $row->{int_obj} =~ m{^(\Q$op\E/[^/]+)};
+				moan "no, that'll shadow something, use $op instead";
+			};
 		}
+		my $c_d = $by_path{$path}{$row->{change_title}}{$op}
+			||= do {
+			my $change_detail =
+				{ branchpath => $path,
+				  change_title => $row->{change_title},
+				  int_branch => $op,
+				  revcxs => []
+				};
+			push @change_details, $change_detail;
+			$change_detail;
+		};
+		push @{$c_d->{revcxs}}, $row;
+	}
+
+	# within those groups, see if the changes are all headrev or
+	# their max_change
+	for my $c_d ( @change_details ) {
+		$c_d->{int_change} =
+			max map { $_->{int_subj_max_change}||-1 }
+				@{$c_d->{revcxs}};
+		$c_d->{int_headrev} =
+			!(grep {
+				!$_->{int_subj_headrev}
+			} @{$c_d->{revcxs}});
+	}
+
+	# ... decide what to do with them ...
+
+	# then display them
+        for my $path ( sort keys %by_path ) {
+		$show_change_detail->($path, $by_path{$path});
 	}
 }
 
@@ -878,6 +954,18 @@ sub show_chg {
 	else {
 		print "...$filename\n";
 	}
+}
+
+sub make_cc {  # only CC's eez tasting like theez
+	my $self =
+		{ path => shift,
+		  change_title => shift,
+		  changes => shift,
+		  obj_path => shift,
+		  obj_change => shift,
+		  obj_headrev => shift };
+
+	
 }
 
 sub diff_right {
