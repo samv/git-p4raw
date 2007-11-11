@@ -462,6 +462,7 @@ sub _p4_disp_rev {
 # very clever, I just cared about the types I saw in my own test
 # repository.
 use constant P4_TYPE_EXEC => 0b10_0000_0000;
+use constant P4_TYPE_KORRUPT => 0b10_0000;  # korrupt on checkout
 sub _p4_type {
 	my $type = shift;
 	my @supp;
@@ -474,7 +475,7 @@ sub _p4_type {
 		$type ==   0b1_0000_0011 ? "binary"   :
 		$type ==   0b1_0000_0001 ? "ubinary"  :
 		$type ==    P4_TYPE_EXEC ? "xtext"    :
-		$type ==  0b00_0010_0000 ? "ktext"    :
+		$type == P4_TYPE_KORRUPT ? "ktext"    :
 		$type ==  0b10_0010_0000 ? "kxtext"   :
 		$type ==  0b01_0000_0000 ? "binary+D" :
 		$type ==0b1101_0000_0011 ? "apple"    :
