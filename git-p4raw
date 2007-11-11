@@ -1332,6 +1332,37 @@ SQL
 	}
 }
 
+sub min_change {
+	my $dbh = shift;
+
+	my $change_sth = $dbh->prepare(<<SQL);
+select
+	c.change,
+	count(cm.change)
+from
+	change c
+	left join change_marks cm
+		using (change)
+where
+	closed = 1
+group by
+	c.change
+having
+	count(cc.change)=0
+order by
+	c.change asc
+limit 1
+SQL
+
+	$change_sth->execute;
+	my $min_change;
+	$change_sth->bind_col(1, \$min_change);
+	$change_sth->fetch;
+	$change_sth->finish;
+
+	return $min_change;
+}
+
 sub do_blobs {
 	my $dbh = shift;
 	# psuedocode for blob import.
