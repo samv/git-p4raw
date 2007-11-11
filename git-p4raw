@@ -1119,6 +1119,13 @@ sub get_rcs {
 		$cmd = "zcat '$rcs_file,d/$rcs_revision'";
 	}
 	else {
+	#    In fact I'd be highly tempted to parse the RCS file
+	#    directly, as it might be significantly faster to hold
+	#    the latest version of each RCS file in memory, as we work
+	#    backwards through the revisions and construct new
+	#    versions of it for feeding to fast-import.  Consider an
+	#    RCS file with many revisions; getting all revisions out
+	#    with `co -p` will be O(N^2) but directly will be O(N)
 		$cmd = "co -q -p$rcs_revision -kb '$rcs_file'";
 	}
 	scalar capture $cmd;
@@ -1306,11 +1313,17 @@ sub show_files {
 	}
 
 	my $join_clause = "";
-	if ($o->{blob}) {
+	if ($o->{blob} || $o->{marks}) {
 		$join_clause = <<SQL;
-	left join rev_blobs
+	left join rev_marks
 		using (depotpath, revision)
 SQL
+		if ($o->{blob}) {
+			$join_clause .= <<SQL;
+	left join marks
+		using (mark)
+SQL
+		}
 	}
 
 	my $where = join " and ", @where;
@@ -1363,14 +1376,168 @@ SQL
 	return $min_change;
 }
 
-sub do_blobs {
+sub do_export {
 	my $dbh = shift;
+
+	my %export_opts;
+	{
+		@ARGV = @_;
+		getopt("n=i" => \$export_opts{chunk_size},
+		      );
+		@_ = @ARGV;
+	}
+	if ( @_ ) {
+		my $revspec = shift;
+		if ( $revspec !~ m{^(\d+)(?:\.\.(\d+))?$} ) {
+			abort "bad change spec '$revspec'";
+		}
+		@export_opts{qw(min max)} = ($1, $2);
+	}
+
+	if ( -t STDOUT ) {
+		open GFI, "|git fast-import "
+			."--export-marks=p4raw.$$.marks"
+				or barf "popen gfi failed; $!";
+	}
+	else {
+		open GFI, ">&STDOUT";
+		open STDOUT, ">&STDERR";
+		moan "won't be able to commit!";
+	}
+
+	export_chunk($dbh, \%export_opts);
+}
+
+use constant CHUNK_SIZE => 4096;
+
+our $BLOB_MARK_MIN;
+our $BLOB_MARK_MAX;
+
+sub gfi_send_blob {
+	my $dbh = shift;
+	my $buf = shift;
+	#my $sha1 = Digest::SHA1->new;
+	my $l = length($$buf);
+	#$sha1->add("blob ".length($$buf)."\0");
+	print GFI "blob\ndata $l\n";
+	#for ( my $o = 0; $o < $l; $o += CHUNK_SIZE ) {
+		#my $s = substr $$buf, $o, CHUNK_SIZE;
+		#$sha1->add($s);
+		#print GFI $s, "\n";
+	#}
+	print GFI $$buf, "\n";
+	#return lc($sha1->hexdigest);
+}
+
+sub export_chunk {
+	my $dbh = shift;
+	my $o = shift;
+
+	my $min_change = $o->{min};
+	my $chunk_size = $o->{chunk_size};
+	my $max_change = $o->{max};
+
 	# psuedocode for blob import.
 	# 1. find the lowest change which is yet to be marked as
 	#    imported
+	if ( !$min_change ) {
+		$min_change = min_change($dbh);
+	}
+	if ( $min_change and $chunk_size ) {
+		$max_change = ($min_change + $chunk_size) - 1;
+	}
+	if ( !$max_change ) {
+		$max_change = max_change($dbh);
+	}
+	if ( $min_change and $max_change ) {
+		$chunk_size = $max_change - $min_change + 1;
+	}
+
+	our $marks_file;
+
 	# 2. get all of the files in it
+	$dbh->begin_work;
+	my ($count_em_sth) = $dbh->prepare(<<SQL);
+select
+	count(distinct rev.depotpath),
+	count(rev.revision)
+from
+	rev
+	left join rev_marks
+		using (depotpath, revision)
+where
+	rev_marks.mark is null and
+	change between ? and ?
+SQL
+	$count_em_sth->execute($min_change, $min_change+$chunk_size-1);
+	my ($paths, $revisions);
+	$count_em_sth->bind_columns(\$paths, \$revisions);
+	$count_em_sth->fetch;
+	$count_em_sth->finish;
+	mutter "this chunk touches $paths depot paths and $revisions"
+		." distinct revisions";
+
+	# don't want to round-trip to the DB just to get sequence numbers
+	$dbh->do(<<SQL);
+alter sequence gfi_mark increment by $revisions
+SQL
+	($BLOB_MARK_MAX) = map { @$_ } @{ $dbh->selectall_arrayref(<<SQL) };
+select nextval('gfi_mark')
+SQL
+	$dbh->do(<<SQL);
+alter sequence gfi_mark increment by 1
+SQL
+	$BLOB_MARK_MIN = $BLOB_MARK_MAX - $revisions + 1;
+
 	# 3. for each of those files, find all the ones without
 	#    rev_blob rows
+	my @files;
+
+	# the sort method here could be improved further, but it is a
+	# reasonable starting point and should mean that many
+	# ancestrally related files are sent to fast-import in
+	# sequence
+	my $file_list = $dbh->prepare(<<SQL);
+select
+	rev.depotpath,
+	rev.file_type,
+	count(rev.revision) as num,
+	min(rev.revision) as min,
+	max(rev.revision) as max,
+	integed.object,
+	integed.object_minrev,
+	integed.object_maxrev
+from
+	rev
+	left join rev_marks
+		using (depotpath, revision)
+	left join integed
+		on (int_type = 2 and subject = depotpath)
+where
+	rev_marks.mark is null and
+	rev.change between ? and ?
+group by
+	depotpath,
+	rev.file_type,
+	integed.object,
+	integed.object_minrev,
+	integed.object_maxrev
+order by
+	(case when integed.object is null
+		then depotpath
+	else
+		integed.object
+	end),
+	(case when integed.object is null
+		then 0
+	else
+		1
+	end);
+SQL
+
+	mutter "getting file list";
+	$file_list->execute($min_change, $max_change);
+
 	# 4. for each of those files, find *all* of the branched
 	#    versions of it, and send them all at once to
 	#    git-fast-import, entering rev_blob rows for them as we
@@ -1378,7 +1545,7 @@ sub do_blobs {
 	#    It's quite important to do all the revisions of a file at
 	#    once, otherwise fast-import will not be able to make
 	#    on-the-fly deltas and the repo will become gigabytes.
-	# 
+	#
 	#    note "p4 print" is not required; can just use rcs
 	#    directly by looking at the "rev" table; it has a rcs
 	#    filename and revision that quite adequately refers to an
@@ -1389,13 +1556,89 @@ sub do_blobs {
 	#    or depotpath/revision.  Then when the fast-import
 	#    "checkpoint" command is issued we will get back the
 	#    GIT-SHA1 values.
-	#    In fact I'd be highly tempted to parse the RCS file
-	#    directly, as it might be significantly faster to hold
-	#    the latest version of each RCS file in memory, as we work
-	#    backwards through the revisions and construct new
-	#    versions of it for feeding to fast-import.  Consider an
-	#    RCS file with many revisions; getting all revisions out
-	#    with `co -p` will be O(N^2) but directly will be O(N)
+	my $list_rcs_revs = $dbh->prepare(<<SQL);
+select
+	revision,
+	rcs_file,
+	rcs_revision,
+	rev_change_type,
+	revision_md5
+from
+	rev
+	left join rev_marks rm
+		using (depotpath, revision)
+where
+	depotpath = ?	and
+	rev.revision between ? and ? and
+	rm.mark is null
+SQL
+
+	my $insert_rev_mark_row = $dbh->prepare(<<SQL);
+insert into
+	rev_marks (depotpath, revision, mark)
+values
+	(?, ?, ?)
+SQL
+
+	mutter "now exporting file images";
+	my $tpb;
+	if ( $VERBOSE >= 1 ) {
+		$tpb  = eval { Term::ProgressBar->new
+				({ count => $revisions,
+				   ETA => "linear",
+				 }) };
+	}
+	my $done_revisions = 0;
+	my $next_update = 1;
+	my %seen;
+	while ( my $row = $file_list->fetchrow_hashref ) {
+
+		my $depotpath = $row->{depotpath};
+		$list_rcs_revs->execute(@{$row}{qw/depotpath min max/});
+		$list_rcs_revs->bind_columns
+			(\(my ($rev, $rcs_file, $rcs_revision,
+			       $change_type, $md5)));
+
+		my $buffer;
+		while ( $list_rcs_revs->fetch ) {
+			next if $seen{md5_hex("$depotpath#$rev")}++;
+			my $mark;
+			if ($change_type == 2) {
+				$mark = 0;
+			}
+			else {
+				my $contents = get_rcs($rcs_file,
+						       $rcs_revision);
+				# don't do the md5 check on +k files
+				if ( !($row->{file_type}&P4_TYPE_KORRUPT)
+				     and
+				     $md5 ne '00000000000000000000000000000000'
+				   ) {
+					my $found_md5 = md5_hex($buffer);
+					if ( lc($found_md5) ne lc($md5) ) {
+						# we fall over in a screaming heap
+						die("MD5 mismatch on $depotpath#$rev "
+						    ."($rcs_file $rcs_revision); "
+						    ."$found_md5 from co -p, $md5 in DB");
+					}
+				}
+				$mark = gfi_send_blob($dbh, \$buffer);
+			}
+			eval {
+				local($dbh->{PrintError}) = 0;
+				$insert_rev_mark_row->execute
+					($depotpath, $rev, $mark);
+			};
+			die "error inserting ($depotpath#$rev => $mark); $@"
+				if $@;
+			$done_revisions++;
+		}
+		if ( $tpb and $done_revisions >= $next_update ) {
+			$next_update = $tpb->update($done_revisions);
+		}
+	}
+	$tpb->update($done_revisions) if $tpb;
+	$file_list->finish;
 
 	# 5. finally, we have rev_blob rows for all of the files
 	#    in this version, so send a tree and/or commit object
