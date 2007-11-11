@@ -46,7 +46,9 @@ sub do_drop {
 	open SQL, "<$SHARE/tables.sql" or die $!;
 	my $statements = join ";\n", reverse
 		map { (m{create (table|sequence) (\S+)}
-		       ? ("drop $1 $2") : ()) } <SQL>;
+		       ? ("drop $1 $2"
+			  . ($1 eq "table" ? " cascade" : ""))
+		       : ()) } <SQL>;
 	close SQL;
 	mutter "Running: $statements";
 	$dbh->begin_work;
