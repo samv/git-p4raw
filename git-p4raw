@@ -1458,6 +1458,9 @@ sub gfi_open {
 		open GFI, ">&STDOUT";
 		open STDOUT, ">&STDERR";
 		moan "won't be able to commit!";
+		say "drop constraints on rev_marks / change_marks or "
+			."this run will not be restartable";
+		undef($MARKS_FILE);
 	}
 	binmode GFI;
 }
@@ -1518,6 +1521,18 @@ sub gfi_send_blob {
 sub gfi_checkpoint {
 	my $dbh = shift;
 
+	if ( !defined $MARKS_FILE ) {
+		moan "don't know where the marks are going!  hope you "
+			.("dropped those rev_marks / change_marks "
+			  ."constraints");
+		goto commit;
+	}
+
+	if ( !keys %MARKS ) {
+		moan "nothing to checkpoint";
+		goto commit;
+	}
+
 	my $last_mtime = (stat $MARKS_FILE)[9];
 	say "Now checkpointing.";
 	print GFI "checkpoint\n\n";
@@ -1567,6 +1582,7 @@ SQL
 		}
 	}
 
+ commit:
 	$dbh->commit
 		or moan "commit failed; ".$dbh->errstr;
 }
@@ -1621,6 +1637,10 @@ SQL
 	$count_em_sth->finish;
 	mutter "this chunk touches $paths depot paths and $revisions"
 		." distinct revisions";
+	if ( !$revisions ) {
+		say "no un-exported file revisions in this range";
+		goto checkpoint;
+	}
 
 	# don't want to round-trip to the DB just to get sequence numbers
 	# so do a special increment.  This is not transaction guarded!
@@ -1788,6 +1808,12 @@ SQL
 	}
 	$tpb->update($done_revisions) if $tpb;
 	$file_list->finish;
+
+ checkpoint:
+	unless ( $o->{no_checkpoint} ) {
+		gfi_checkpoint($dbh);
+	}
+}
 
 	# 5. finally, we have rev_blob rows for all of the files
 	#    in this version, so send a tree and/or commit object
