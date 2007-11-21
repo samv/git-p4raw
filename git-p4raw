@@ -1362,21 +1362,46 @@ SQL
 
 sub min_change {
 	my $dbh = shift;
+	my $o = shift;
+
+	my $joins = "";
+	my $having = "";
+
+	if ( $o->{blobs} ) {
+		$joins = <<SQL;
+	left join rev r
+		on (r.change = c.change and
+			rev_change_type != 2)
+	left join rev_marks rm
+		using (depotpath, revision)
+SQL
+		$having = <<SQL;
+having
+	count(rm.mark)=0
+SQL
+	}
+	elsif ( $o->{changes} ) {
+		$joins = <<SQL;
+	left join change_marks cm
+		using (change)
+SQL
+		$having = <<SQL;
+having
+	count(cm.mark)=0
+SQL
+	}
 
 	my $change_sth = $dbh->prepare(<<SQL);
 select
-	c.change,
-	count(cm.change)
+	c.change
 from
 	change c
-	left join change_marks cm
-		using (change)
+${joins}
 where
 	closed = 1
 group by
 	c.change
-having
-	count(cc.change)=0
+${having}
 order by
 	c.change asc
 limit 1
