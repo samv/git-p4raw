@@ -700,10 +700,12 @@ SQL
 sub do_describe {
 	my $dbh = shift;
 
+	my $write;
 	my %desc_opts;
 	{
 		@ARGV = @_;
 		getopt( "l" => \$desc_opts{long},
+			"w" => \$write,
 		      );
 		@_ = @ARGV;
 	}
@@ -714,7 +716,49 @@ sub do_describe {
 		abort "'$change' is not a valid change number";
 	}
 
+	if ( !$write ) {
+		$desc_opts{add_change_branch} = sub {
+			my $branch = shift;
+			my $change = shift;
+			print "Create branch $branch\n";
+		};
+		$desc_opts{add_parent} = sub {
+			my $branch = shift;
+			my $change = shift;
+			my $parent_branchpath = shift;
+			my $parent_change = shift;
+			print "Add $parent_branchpath\@$parent_change as a parent\n";
+		};
+	}
+
 	change_stats($dbh, $change, \%desc_opts);
+}
+
+sub derive_branch_src {
+	my $path = shift;
+	my $pc = shift;
+	my $callback = shift;
+	my $branches = $pc->{branch};
+	if ( keys %$branches > 1 ) {
+		moan "multiple branch sources, not doing anything";
+	}
+	else {
+		my ($source_path, $info) = %$branches;
+		$callback->({ branchpath => $path,
+			      parent_branchpath => $source_path,
+			      parent_change => $info->{int_change},
+			      manual => 0,
+			    });
+	}
+}
+
+sub derive_extra_parents {
+	my $path = shift;
+	my $pc = shift;
+	my $callback = shift;
+	my $integes = $pc->{integrate};
+	$DB::single = 1;
+	moan "yeah yeah";
 }
 
 use POSIX qw(strftime);
@@ -733,18 +777,22 @@ sub change_stats {
 		print "Change $d->{change} by $d->{who_user}\@",
 			("$d->{who_host} on ",
 			 strftime("%Y/%m/%d %H:%M:%S",
-				   localtime($d->{change_time})),
-			 "\n");
-		print "\n";
-		print map { "\t$_\n" } split "\n", $d->{description};
-		print "\n";
+				   localtime($d->{change_time})));
+		if ( $o->{compact} ) {
+			print " '".substr($d->{description},0,40)."'\n";
+		}
+		else {
+			print "\n\n";
+			print map { "\t$_\n" } split "\n", $d->{description};
+			print "\n";
+		}
 	};
 
 	# this one gets called with the list of branches
-	my %paths;
+	my %prev_paths;
 	my $prepare_paths = sub {
 		my $row = shift;
-		$paths{$row->{branchpath}} = $row->{change};
+		$prev_paths{$row->{branchpath}} = $row->{change};
 		$o->{prepare_path}->($row) if $o->{prepare_path};
 	};
 
@@ -760,9 +808,8 @@ sub change_stats {
 	my $show_change_detail = $o->{show_change_detail} = sub {
 		my $path = shift;
 		my $details = shift;
-		if ( ! $o->{answers} ) {
-			print "On path $path,\n";
-		}
+		my $info = shift;
+		print "On ".($info->{new}?"new ":"")."path $path,\n";
 		while (my ($change_title, $by_int_path)
 		       = each %$details) {
 			for my $int_path (sort keys %$by_int_path) {
@@ -778,7 +825,7 @@ sub change_stats {
 				print "\n";
 				if ( $o->{long} ) {
 					for my $c ( @{$c_d->{revcxs}} ) {
-						show_chg($o, $path, $c);
+						show_chg($path, $c);
 					}
 				}
 			}
@@ -812,6 +859,41 @@ SQL
 no_header:
 	$sth = $dbh->prepare(<<SQL);
 select
+	branchpath,
+	max(change) as change
+from
+	change_branches
+where
+	change <= ?
+group by
+	branchpath
+SQL
+	$sth->execute($change);
+	while ( my $row = $sth->fetchrow_hashref ) {
+		$prepare_paths->($row);
+	}
+	$sth->finish;
+
+	my $know_parents;
+	$sth = $dbh->prepare(<<SQL);
+select
+	*
+from
+	change_parents
+where
+	change = ?
+order by
+	manual desc
+SQL
+	$sth->execute($change);
+	while ( my $row = $sth->fetchrow_hashref ) {
+		$know_parents++;
+		$change_parents->($row);
+	}
+	$sth->finish;
+
+	$sth = $dbh->prepare(<<SQL);
+select
 	*,
 	change_type.title as change_title
 from
@@ -827,6 +909,7 @@ SQL
 	my (@revcxs);
 
 	my $path_re;
+	my %paths = %prev_paths;
 	my $add_path = sub {
 		if ( @_ ) {
 			if ( grep { (!$_[1] or defined $paths{$_[0]})
@@ -856,13 +939,21 @@ SQL
 		unless ( $path =~ m{^($path_re)/} ) {
 			# new path, add to paths
 			$path =~ s{/[^/]*$}{};
-			if ( $row->{int_obj} ) {
+			if ( $row->{int_obj} and
+			     $row->{int_obj} =~ m{^($path_re)/} ) {
+				$path = substr $row->{depotpath}, 0,
+					length($row->{depotpath}) -
+					(length($row->{int_obj}) -
+					 length $1);
+				moan "$path is it";
+			}
+			elsif ( $row->{int_obj} ) {
 				$path = diff_right($row->{int_obj},
 						   $row->{depotpath});
 				moan "using diff_right($row->{int_obj}, $row->{depotpath}) for change branch path (=$path)";
 			}
 			else {
-				mutter "adding new branchpath $path because I saw $path";
+				mutter "adding new branchpath $path because I saw $row->{depotpath}";
 			};
 			$add_path->($path, 1);
 		}
@@ -870,12 +961,20 @@ SQL
 		$o->{revcxs}->($row, $path) if $o->{revcxs};
 	};
 
-	# paranoia - the above was a quick sweep only.  remove
+	# paranoia - the above was a quick sweep only.  remove the paths
+	# that shadow each other.
 	my @gonners = grep { m{^($path_re)/} && !$paths{$_} }
 		keys %paths;
 	if ( @gonners ) {
-		moan "ignoring paths @gonners";
-		delete @paths{@gonners};
+		for my $gonner ( @gonners ) {
+			if ( my @x = grep m{^\Q$_\E/}, keys %prev_paths ) {
+				# this is a bug - the $add_path closure
+				# shouldn't let these through
+				die "$gonner shadows branches: @x";
+			}
+			delete $paths{@gonners};
+			moan "ignoring changes on path $gonner";
+		}
 		$add_path->();
 	}
 
@@ -930,16 +1029,117 @@ SQL
 			} @{$c_d->{revcxs}});
 	}
 
-	# ... decide what to do with them ...
+	my $add_parent_sth;
+	my @change_parent_cols = qw(branchpath change parent_branchpath
+				    parent_change ref manual);
+	my $add_parent = $o->{add_parent} ||= sub {
+		$add_parent_sth ||= $dbh->prepare(<<SQL);
+insert into change_parents
+	(${\(join ", ", @change_parent_cols)})
+values
+	(${\(join ", ", ("?") x @change_parent_cols)})
+SQL
+		mutter "saving new parent: "
+			.join(",",map{defined($_)?$_:"NULL"}@_)
+				if $VERBOSE >= 1;
+		$add_parent_sth->execute(@_);
+	};
+	my $add_change_branch_sth;
+	my $add_change_branch = $o->{add_change_branch} ||= sub {
+		$add_change_branch_sth ||= $dbh->prepare(<<SQL);
+insert into change_branches
+	(branchpath, change)
+values (?, ?)
+SQL
+		mutter "saving new branch path: @_";
+		$add_change_branch_sth->execute(@_);
+	};
 
-	# then display them
+	my @ncp;
+	my $new_change_parents = sub {
+		my $row = shift;
+		$row->{change} = $change;
+		push @ncp, $row;
+		$change_parents->($row);
+	};
+	# derive extra parents if necessary
         for my $path ( sort keys %by_path ) {
-		$show_change_detail->($path, $by_path{$path});
+		my $pc = $by_path{$path};
+		my $parents = $parents{$path}||[];
+		if ( grep { $_->{manual} } @$parents ) {
+			$parents = [ grep { $_->{manual} } @$parents ];
+		}
+
+		my $info = {};
+		if ( !exists $prev_paths{$path} ) {
+			$info->{new} = 1;
+			if ( exists $pc->{integrate} or
+			     exists $pc->{delete} or
+			     exists $pc->{edit}
+			   ) {
+				moan "new path $path has new changes, odd";
+				$info->{invalid} = 1;
+			}
+			if ( !$know_parents and $pc->{branch} ) {
+				# derive the branch's parent
+				derive_branch_src $path, $pc
+					=> $new_change_parents;
+			}
+			$add_change_branch->($path, $change);
+		}
+		elsif ( exists $pc->{branch} ) {
+			# cross-branch copy?
+			$DB::single = 1;
+			1;
+		}
+		elsif ( exists $pc->{integrate} ) {
+			# might be a cross-merge.
+			$DB::single = 1;
+			if ( !$know_parents ) {
+				derive_extra_parents $path, $pc
+					=> $new_change_parents;
+			}
+		}
+		else {
+			unless ($prev_paths{$path} == $change) {
+				$add_change_branch->($path, $change);
+			}
+			if ( !$know_parents ) {
+				$new_change_parents->
+					({ branchpath => $path,
+					   parent_branchpath => $path,
+					   parent_change => $prev_paths{$path},
+					 });
+			}
+		}
+		$show_change_detail->($path, $pc, $info);
+		if ( !$know_parents ) {
+			for my $row (@ncp) {
+				my @row;
+				for my $col ( @change_parent_cols ) {
+					push @row, $row->{$col};
+				}
+				$add_parent->(@row);
+			}
+		}
+		elsif ( @$parents ) {
+			for ( @$parents ) {
+				print "Parent: ",
+					(($_->{ref} ? "$_->{ref}"
+					  : ("$_->{parent_branchpath}\@"
+					     ."$_->{parent_change}")),
+					 ((!$_->{ref}&&$_->{manual})
+					  ? " (manual)" : ""),
+					 "\n");
+			}
+		}
+		else {
+			print "New root.\n";
+		}
 	}
 }
 
 sub show_chg {
-	my $o = shift;
 	my $path = shift;
 	my $chg = shift;
 
@@ -1373,7 +1573,7 @@ sub min_change {
 		$joins = <<SQL;
 	left join rev r
 		on (r.change = c.change and
-			rev_change_type != 2)
+			r.rev_change_type != 2)
 	left join rev_marks rm
 		using (depotpath, revision)
 SQL
@@ -1390,6 +1590,16 @@ SQL
 		$having = <<SQL;
 having
 	count(cm.mark)=0
+SQL
+	}
+	elsif ( $o->{branches} ) {
+		$joins = <<SQL;
+	left join change_branches cb
+		using (change)
+SQL
+		$having = <<SQL;
+having
+	count(cb.branchpath)=0
 SQL
 	}
 
@@ -1422,6 +1632,8 @@ SQL
 }
 
 sub parse_export_opts {
+	my $dbh = shift;
+	my $type = shift;
 	my %export_opts;
 	{
 		@ARGV = @_;
@@ -1436,6 +1648,21 @@ sub parse_export_opts {
 		}
 		@export_opts{qw(min max)} = ($1, $2);
 	}
+	if ( !$export_opts{min} ) {
+		$export_opts{min} = min_change($dbh, { $type => 1 });
+	}
+	if ( $export_opts{min} and $export_opts{chunk_size} ) {
+		$export_opts{max} = $export_opts{min}
+			+ $export_opts{chunk_size} - 1;
+	}
+	if ( !$export_opts{max} ) {
+		$export_opts{max} = max_change($dbh);
+	}
+	if ( $export_opts{min} and $export_opts{max} ) {
+		$export_opts{chunk_size} = $export_opts{max}
+			- $export_opts{min} + 1;
+	}
+
 	$export_opts{verbose} = $VERBOSE;
 	%export_opts;
 }
@@ -1443,7 +1670,7 @@ sub parse_export_opts {
 sub do_export_blobs {
 	my $dbh = shift;
 
-	my %export_opts = parse_export_opts(@_);
+	my %export_opts = parse_export_opts($dbh, "blobs", @_);
 
 	gfi_open();
 
@@ -1604,19 +1831,6 @@ sub export_blob_chunk {
 	# psuedocode for blob import.
 	# 1. find the lowest change which is yet to be marked as
 	#    imported
-	if ( !$min_change ) {
-		$min_change = min_change($dbh, { blobs => 1 });
-	}
-	if ( $min_change and $chunk_size ) {
-		$max_change = ($min_change + $chunk_size) - 1;
-	}
-	if ( !$max_change ) {
-		$max_change = max_change($dbh);
-	}
-	if ( $min_change and $max_change ) {
-		$chunk_size = $max_change - $min_change + 1;
-	}
-
 	say "exporting blobs for changes $min_change .. "
 		."$max_change";
 
@@ -1817,6 +2031,21 @@ SQL
  checkpoint:
 	unless ( $o->{no_checkpoint} ) {
 		gfi_checkpoint($dbh);
+	}
+}
+
+sub do_find_branches {
+	my $dbh = shift;
+
+	# "close enough" :)
+	my %export_opts = parse_export_opts($dbh, "branches", @_);
+
+	say "finding branches for $export_opts{chunk_size} changes";
+	for my $change ( $export_opts{min} .. $export_opts{max} ) {
+		change_stats($dbh, $change,
+			     { compact => 1,
+			     },
+			    );
 	}
 }
 
