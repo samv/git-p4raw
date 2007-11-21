@@ -1421,9 +1421,7 @@ SQL
 	return $min_change;
 }
 
-sub do_export_blobs {
-	my $dbh = shift;
-
+sub parse_export_opts {
 	my %export_opts;
 	{
 		@ARGV = @_;
@@ -1439,6 +1437,13 @@ sub do_export_blobs {
 		@export_opts{qw(min max)} = ($1, $2);
 	}
 	$export_opts{verbose} = $VERBOSE;
+	%export_opts;
+}
+
+sub do_export_blobs {
+	my $dbh = shift;
+
+	my %export_opts = parse_export_opts(@_);
 
 	gfi_open();
 
@@ -1822,6 +1827,9 @@ SQL
 	#    integed table should probably go into the commit message,
 	#    where it is not redundant (which is a difficult criterion
 	#    to nail down for sure!)
+
+sub do_export_commits {
+	my $dbh = shift;
 }
 
 #=====================================================================
