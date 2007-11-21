@@ -146,8 +146,7 @@ create table rev_marks (
 	depotpath TEXT not null,
 	revision int not null,
 	primary key (depotpath,revision),
-	mark int not null references marks DEFERRABLE INITIALLY DEFERRED,
-	unique (mark)
+	mark int not null references marks DEFERRABLE INITIALLY DEFERRED
 );
 
 -- what branches we determined exist along the way
