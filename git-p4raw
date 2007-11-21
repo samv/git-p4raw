@@ -13,6 +13,8 @@ use IO::Handle;
 use File::Path qw(rmtree);
 use Fatal qw(:void open);
 use Digest::SHA1;
+use Digest::MD5 qw(md5_hex);
+BEGIN { eval "use Term::ProgressBar" };
 
 use vars qw($SHARE $SCRIPT_MODE);
 $SHARE = $Bin;
@@ -1416,7 +1418,7 @@ SQL
 	return $min_change;
 }
 
-sub do_export {
+sub do_export_blobs {
 	my $dbh = shift;
 
 	my %export_opts;
@@ -1433,10 +1435,20 @@ sub do_export {
 		}
 		@export_opts{qw(min max)} = ($1, $2);
 	}
+	$export_opts{verbose} = $VERBOSE;
 
+	gfi_open();
+
+	export_blob_chunk($dbh, \%export_opts);
+}
+
+our $MARKS_FILE;
+
+sub gfi_open {
+	$MARKS_FILE ||= "p4raw.$$.marks";
 	if ( -t STDOUT ) {
 		open GFI, "|git fast-import "
-			."--export-marks=p4raw.$$.marks"
+			."--export-marks=$MARKS_FILE"
 				or barf "popen gfi failed; $!";
 	}
 	else {
@@ -1444,34 +1456,122 @@ sub do_export {
 		open STDOUT, ">&STDERR";
 		moan "won't be able to commit!";
 	}
-
-	export_chunk($dbh, \%export_opts);
+	binmode GFI;
 }
 
 use constant CHUNK_SIZE => 4096;
 
-our $BLOB_MARK_MIN;
-our $BLOB_MARK_MAX;
+our $MARK_MIN;
+our $MARK_MAX;
+our $MARK;
+
+sub gfi_get_marks {
+	my $dbh = shift;
+	my $count = shift;
+	my ($dummy) = map { @$_ } @{ $dbh->selectall_arrayref(<<SQL) };
+select nextval('gfi_mark')
+SQL
+	$dbh->do(<<SQL) or die $dbh->errstr;
+alter sequence gfi_mark increment by $count
+SQL
+	($MARK_MAX) = map { @$_ } @{ $dbh->selectall_arrayref(<<SQL) };
+select nextval('gfi_mark')
+SQL
+	$dbh->do(<<SQL) or die $dbh->errstr;
+alter sequence gfi_mark increment by 1
+SQL
+	$MARK_MIN = $MARK_MAX - $count + 1;
+	die "read nextval of $MARK_MAX" unless $MARK_MIN > 0;
+	$MARK = $MARK_MIN - 1;
+}
+
+our %MARKS;
+our %MARK_TYPES = qw(blob 1 commit 2 tag 3);
+
+sub gfi_get_mark {
+	my $dbh = shift;
+	my $type = shift;
+	unless ( $MARK_MAX and ++$MARK <= $MARK_MAX ) {
+		($MARK) = map { @$_ } @{ $dbh->selectall_arrayref(<<SQL) };
+select nextval('gfi_mark')
+SQL
+	}
+	$MARKS{$MARK}=$MARK_TYPES{$type};
+	$MARK;
+}
 
 sub gfi_send_blob {
 	my $dbh = shift;
 	my $buf = shift;
-	#my $sha1 = Digest::SHA1->new;
 	my $l = length($$buf);
-	#$sha1->add("blob ".length($$buf)."\0");
-	print GFI "blob\ndata $l\n";
-	#for ( my $o = 0; $o < $l; $o += CHUNK_SIZE ) {
-		#my $s = substr $$buf, $o, CHUNK_SIZE;
-		#$sha1->add($s);
-		#print GFI $s, "\n";
-	#}
+	my $mark = gfi_get_mark($dbh, "blob");
+	print GFI "blob\n";
+	print GFI "mark :", $mark, "\n";
+	print GFI "data $l\n";
 	print GFI $$buf, "\n";
-	#return lc($sha1->hexdigest);
+	$mark;
 }
 
-sub export_chunk {
+sub gfi_checkpoint {
+	my $dbh = shift;
+
+	my $last_mtime = (stat $MARKS_FILE)[9];
+	say "Now checkpointing.";
+	print GFI "checkpoint\n\n";
+	GFI->flush();
+
+	my $time;
+	while ( ! -e $MARKS_FILE or
+		$last_mtime and
+		((stat _)[9] == $last_mtime) ) {
+		sleep 1;
+		$time++;
+		say "waited ${time}s for $MARKS_FILE to be created";
+	}
+
+	my $insert_mark_sth = $dbh->prepare(<<SQL);
+insert into marks
+	(mark, commitid, blobid)
+values
+	(?, ?, ?)
+SQL
+	my $b_t = $MARK_TYPES{blob};
+	my $c_t = $MARK_TYPES{commit};
+
+	while ( keys %MARKS ) {
+		my @marks = `cat $MARKS_FILE`;
+		my ($t, $found, $mark, $sha1);
+		for ( @marks ) {
+			if (($mark, $sha1) =
+			    m{^:(\d+) ([0-9a-f]{40})} and
+			    ($t = delete $MARKS{$mark})
+			   ) {
+				$found++;
+				$insert_mark_sth->execute
+					($mark,
+					 ($t == $c_t ? $sha1 : undef),
+					 ($t == $b_t ? $sha1 : undef),
+					);
+			}
+		}
+		if ( $found ) {
+			mutter "wrote $found marks to DB";
+		}
+		else {
+			moan "still waiting for ".(scalar keys %MARKS)
+				." mark(s) to appear";
+			sleep 1;
+		}
+	}
+
+	$dbh->commit
+		or moan "commit failed; ".$dbh->errstr;
+}
+
+sub export_blob_chunk {
 	my $dbh = shift;
 	my $o = shift;
+	local($VERBOSE) = $o->{verbose};
 
 	my $min_change = $o->{min};
 	my $chunk_size = $o->{chunk_size};
@@ -1481,7 +1581,7 @@ sub export_chunk {
 	# 1. find the lowest change which is yet to be marked as
 	#    imported
 	if ( !$min_change ) {
-		$min_change = min_change($dbh);
+		$min_change = min_change($dbh, { blobs => 1 });
 	}
 	if ( $min_change and $chunk_size ) {
 		$max_change = ($min_change + $chunk_size) - 1;
@@ -1493,7 +1593,8 @@ sub export_chunk {
 		$chunk_size = $max_change - $min_change + 1;
 	}
 
-	our $marks_file;
+	say "exporting blobs for changes $min_change .. "
+		."$max_change";
 
 	# 2. get all of the files in it
 	$dbh->begin_work;
@@ -1506,6 +1607,7 @@ from
 	left join rev_marks
 		using (depotpath, revision)
 where
+	rev.rev_change_type != 2 and
 	rev_marks.mark is null and
 	change between ? and ?
 SQL
@@ -1518,16 +1620,8 @@ SQL
 		." distinct revisions";
 
 	# don't want to round-trip to the DB just to get sequence numbers
-	$dbh->do(<<SQL);
-alter sequence gfi_mark increment by $revisions
-SQL
-	($BLOB_MARK_MAX) = map { @$_ } @{ $dbh->selectall_arrayref(<<SQL) };
-select nextval('gfi_mark')
-SQL
-	$dbh->do(<<SQL);
-alter sequence gfi_mark increment by 1
-SQL
-	$BLOB_MARK_MIN = $BLOB_MARK_MAX - $revisions + 1;
+	# so do a special increment.  This is not transaction guarded!
+	gfi_get_marks($dbh, $revisions);
 
 	# 3. for each of those files, find all the ones without
 	#    rev_blob rows
@@ -1554,6 +1648,7 @@ from
 	left join integed
 		on (int_type = 2 and subject = depotpath)
 where
+	rev.rev_change_type != 2 and
 	rev_marks.mark is null and
 	rev.change between ? and ?
 group by
@@ -1580,8 +1675,8 @@ SQL
 
 	# 4. for each of those files, find *all* of the branched
 	#    versions of it, and send them all at once to
-	#    git-fast-import, entering rev_blob rows for them as we
-	#    get hashes back from git-fast-import
+	#    git-fast-import, entering rev_marks rows for them as we
+	#    send marks to git-fast-import
 	#    It's quite important to do all the revisions of a file at
 	#    once, otherwise fast-import will not be able to make
 	#    on-the-fly deltas and the repo will become gigabytes.
@@ -1608,6 +1703,7 @@ from
 	left join rev_marks rm
 		using (depotpath, revision)
 where
+	rev_change_type != 2 and
 	depotpath = ?	and
 	rev.revision between ? and ? and
 	rm.mark is null
@@ -1622,7 +1718,7 @@ SQL
 
 	mutter "now exporting file images";
 	my $tpb;
-	if ( $VERBOSE >= 1 ) {
+	if ( $o->{verbose} >= 0 ) {
 		$tpb  = eval { Term::ProgressBar->new
 				({ count => $revisions,
 				   ETA => "linear",
@@ -1630,7 +1726,9 @@ SQL
 	}
 	my $done_revisions = 0;
 	my $next_update = 1;
+ 	my $delete_md5 = '00000000000000000000000000000000';
 	my %seen;
+	my %md5_mark;
 	while ( my $row = $file_list->fetchrow_hashref ) {
 
 		my $depotpath = $row->{depotpath};
@@ -1639,31 +1737,39 @@ SQL
 			(\(my ($rev, $rcs_file, $rcs_revision,
 			       $change_type, $md5)));
 
-		my $buffer;
 		while ( $list_rcs_revs->fetch ) {
 			next if $seen{md5_hex("$depotpath#$rev")}++;
+
+			my $has_md5 = $md5 ne $delete_md5;
+			my $lc_md5 = lc($md5);
 			my $mark;
-			if ($change_type == 2) {
-				$mark = 0;
+			if ( $has_md5 and $md5_mark{$lc_md5} ) {
+				$mark = $md5_mark{$lc_md5};
+				goto record;
 			}
-			else {
-				my $contents = get_rcs($rcs_file,
-						       $rcs_revision);
-				# don't do the md5 check on +k files
-				if ( !($row->{file_type}&P4_TYPE_KORRUPT)
-				     and
-				     $md5 ne '00000000000000000000000000000000'
-				   ) {
-					my $found_md5 = md5_hex($buffer);
-					if ( lc($found_md5) ne lc($md5) ) {
-						# we fall over in a screaming heap
-						die("MD5 mismatch on $depotpath#$rev "
-						    ."($rcs_file $rcs_revision); "
-						    ."$found_md5 from co -p, $md5 in DB");
-					}
+
+			my $contents = get_rcs($rcs_file, $rcs_revision);
+
+			my $found_md5;
+			# don't do the md5 check on +k files
+			if ( $has_md5 and
+			     !($row->{file_type}&P4_TYPE_KORRUPT)
+			   ) {
+				$found_md5 = lc(md5_hex($contents));
+				if ( $found_md5 ne $lc_md5 ) {
+					# we fall over in a screaming heap
+					die("MD5 mismatch on $depotpath"
+					    ."#$rev ($rcs_file "
+					    ."$rcs_revision); "
+					    ."$found_md5 from co -p, "
+					    ."$md5 in DB");
 				}
-				$mark = gfi_send_blob($dbh, \$buffer);
 			}
+
+			$mark = gfi_send_blob($dbh, \$contents);
+			$md5_mark{$lc_md5||$found_md5}
+				= $mark if $has_md5 or $found_md5;
+		record:
 			eval {
 				local($dbh->{PrintError}) = 0;
 				$insert_rev_mark_row->execute
@@ -1853,13 +1959,19 @@ is unable to be checked for integrity at C<git-p4raw check> time.
 
 =item C<git-p4raw export [ CHG[..CHG] | -n NUM ]> (TODO)
 
-Export a bunch of changes, either bounded by a range of revisions or
-the next NUM revisions, to a C<git fast-import> process.  If this
-command is started with standard output as a terminal, it will start
-C<git fast-import> itself.
+=item C<git-p4raw export-blobs [ CHG[..CHG] | -n NUM ]>
+
+=item C<git-p4raw export-commits [ CHG[..CHG] | -n NUM ]> (TODO)
+
+Export a bunch of changes (or, just the blobs, or just the commits)
+bounded by a range of revisions or the next NUM revisions, to a C<git
+fast-import> process.  If this command is started with standard output
+as a terminal, it will start C<git fast-import> itself.
 
 If you start C<git fast-import>, you must take care to pass
 C<--export-marks> to it if you want to perform subsequent import runs.
+Also you will need to remove the foreign key constraints on rev_marks
+and change_marks.
 
 =back
 
