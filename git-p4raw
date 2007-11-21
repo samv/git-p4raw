@@ -1393,7 +1393,7 @@ having
 SQL
 	}
 
-	my $change_sth = $dbh->prepare(<<SQL);
+	my $sql = <<SQL;
 select
 	c.change
 from
@@ -1409,6 +1409,9 @@ order by
 limit 1
 SQL
 
+	mutter "finding first change with new "
+		.($o->{blobs}?"blobs":"commits");
+	my $change_sth = $dbh->prepare($sql);
 	$change_sth->execute;
 	my $min_change;
 	$change_sth->bind_col(1, \$min_change);
