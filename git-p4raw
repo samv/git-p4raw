@@ -1138,7 +1138,12 @@ sub get_rcs {
 	#    with `co -p` will be O(N^2) but directly will be O(N)
 		$cmd = "co -q -p$rcs_revision -kb '$rcs_file'";
 	}
-	scalar capture $cmd;
+	open CMD, "-|", "$cmd" or die $!;
+	binmode CMD;
+	local($/) = \((stat CMD)[11]||4096);
+	my @data = <CMD>;
+	close CMD;
+	join "", @data;
 }
 
 sub do_print {
