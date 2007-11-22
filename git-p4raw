@@ -1157,7 +1157,7 @@ SQL
 			     exists $PcO->{delete} or
 			     exists $PcO->{edit}
 			   ) {
-				moan "new path $path has new changes, odd";
+				moan "new path $path@\$change has non-new changes, odd";
 				$info->{invalid} = 1;
 			}
 			if ( !$know_parents and $PcO->{branch} ) {
