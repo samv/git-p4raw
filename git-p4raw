@@ -2256,6 +2256,8 @@ Size of a "chunk" for export.
 Specify the delta depth.  If you are working on projects with a long
 history this can save a lot of space.  Good for archives of old history.
 
+=item  
+
 =back
 
 =back
