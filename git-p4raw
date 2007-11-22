@@ -4,7 +4,7 @@ use strict vars, subs;
 use warnings;
 use Scriptalicious;
 use FindBin qw($Bin);
-use List::Util qw(sum max);
+use List::Util qw(sum max min);
 use Scalar::Util qw(looks_like_number);
 use Data::Dumper;
 use DBI;
@@ -720,14 +720,13 @@ sub do_describe {
 		$desc_opts{add_change_branch} = sub {
 			my $branch = shift;
 			my $change = shift;
-			print "Create branch $branch\n";
+			print "action: add change_branch for $branch\@$change\n";
 		};
 		$desc_opts{add_parent} = sub {
-			my $branch = shift;
-			my $change = shift;
-			my $parent_branchpath = shift;
-			my $parent_change = shift;
-			print "Add $parent_branchpath\@$parent_change as a parent\n";
+			my $row = shift;
+			print "action: add $row->{parent_branchpath}\@"
+				.("$row->{parent_change} as a parent of"
+				  ." $row->{branchpath}\n");
 		};
 	}
 
@@ -740,7 +739,9 @@ sub derive_branch_src {
 	my $callback = shift;
 	my $branches = $PcO->{branch};
 	if ( keys %$branches > 1 ) {
-		moan "multiple branch sources for $path, erp!";
+		$DB::single = 1;
+		print "multiple branch sources for $path, erp!";
+		print "Too many parents: @{[ map{ $_||$path } keys %$branches ]}\n";
 	}
 	else {
 		my ($source_path, $info) = %$branches;
@@ -756,11 +757,62 @@ sub derive_extra_parents {
 	my $path = shift;
 	my $PcO = shift;
 	my $POc = shift;
+	my $prev = shift;
 	my $callback = shift;
 
-	my $integes = $pc->{integrate};
-	$DB::single = 1;
-	moan "yeah yeah";
+	my $root_changes = delete $POc->{""};
+
+	if ( keys %$POc > 1 ) {
+		print "multiple sources for this merge:  @{[map { $_||$path} keys %$POc]}\n";
+		# well, we could write an Octopus merge, but it would
+		# be an /EVIL/ Octopus merge ("Shoggoth")
+		print "cowardly refusing to write an Octopus\n";
+		if ( $root_changes ) {
+			$callback->({ branchpath => $path,
+				      parent_branchpath => $path,
+				      parent_change => $prev->{$path},
+				      manual => 0 });
+		}
+	}
+	else {
+		my ($source_path, $chg_info) = %$POc;
+		if ( !grep { !$_->{int_subj_headrev} }
+		     map { @$_ } map { values %$_ }
+		     values %$chg_info ) {
+			# looks like a cross-merge, but 
+			$DB::single = 1;
+			print "probably a cross-merge from $source_path\@".$prev->{$source_path}." but need to check with merge base algo.\n";
+			$callback->({ branchpath => $path,
+				      parent_branchpath => $path,
+				      parent_change => $prev->{$path},
+				      manual => 0 });
+			$callback->({ branchpath => $path,
+				      parent_branchpath => $source_path,
+				      parent_change => $prev->{$source_path},
+				      manual => 0 });
+		}
+		else {
+			# well this might still be a cross-merge, but
+			# of an old revision.
+			my $max = max values %$prev;
+			my $max_change = max map { $_->{int_subj_max_change}||-1 }
+				map { @$_ } map { values %$_ }
+					values %$chg_info;
+			$DB::single = 1;
+			print "possibly a cross-merge from $source_path\@$max_change but need to check with merge base algo.\n";
+			if ( $root_changes ) {
+				$callback->({ branchpath => $path,
+					      parent_branchpath => $path,
+					      parent_change => $prev->{$path},
+					      manual => 0 });
+			}
+			#j$callback->({ branchpath => $path,
+				      #jparent_branchpath => $source_path,
+				      #jparent_change => (max map { $_->{int_change} }
+							#jvalues %$chg_info),
+				      #jmanual => 0 });
+		}
+	}
 }
 
 use POSIX qw(strftime);
@@ -792,9 +844,15 @@ sub change_stats {
 
 	# this one gets called with the list of branches
 	my %prev_paths;
+	my %curr_paths;
 	my $prepare_paths = sub {
 		my $row = shift;
-		$prev_paths{$row->{branchpath}} = $row->{change};
+		if ( $row->{change} == $change ) {
+			$curr_paths{$row->{branchpath}}++;
+		}
+		else {
+			$prev_paths{$row->{branchpath}} = $row->{change};
+		}
 		$o->{prepare_path}->($row) if $o->{prepare_path};
 	};
 
@@ -866,11 +924,19 @@ select
 from
 	change_branches
 where
-	change <= ?
+	change < ?
 group by
 	branchpath
+union
+select
+	branchpath,
+	change
+from
+	change_branches
+where
+	change = ?
 SQL
-	$sth->execute($change);
+	$sth->execute(($change) x 2);
 	while ( my $row = $sth->fetchrow_hashref ) {
 		$prepare_paths->($row);
 	}
@@ -911,7 +977,7 @@ SQL
 	my (@revcxs);
 
 	my $path_re;
-	my %paths = %prev_paths;
+	my %paths = (%prev_paths, %curr_paths);
 	my $add_path = sub {
 		if ( @_ ) {
 			if ( grep { (!$_[1] or defined $paths{$_[0]})
@@ -947,7 +1013,6 @@ SQL
 					length($row->{depotpath}) -
 					(length($row->{int_obj}) -
 					 length $1);
-				moan "$path is it";
 			}
 			elsif ( $row->{int_obj} ) {
 				$path = diff_right($row->{int_obj},
@@ -969,13 +1034,14 @@ SQL
 		keys %paths;
 	if ( @gonners ) {
 		for my $gonner ( @gonners ) {
-			if ( my @x = grep m{^\Q$_\E/}, keys %prev_paths ) {
+			if ( my @x = grep m{^\Q$_\E/}, keys %prev_paths,
+			     keys %curr_paths ) {
 				# this is a bug - the $add_path closure
 				# shouldn't let these through
 				die "$gonner shadows branches: @x";
 			}
 			delete $paths{@gonners};
-			moan "ignoring changes on path $gonner";
+			moan "ignoring changes on path $gonner\@$change";
 		}
 		$add_path->();
 	}
@@ -1032,10 +1098,24 @@ SQL
 			} @{$c_d->{revcxs}});
 	}
 
+	my $show_parent = sub {
+		my $row = shift;
+		print "Parent: ",
+			(($row->{ref} ? "$row->{ref}"
+			  : ("$row->{parent_branchpath}\@"
+			     ."$row->{parent_change}")),
+			 ((!$row->{ref}&&$row->{manual})
+			  ? " (manual)" : ""),
+			 "\n");
+	};
+
 	my $add_parent_sth;
 	my @change_parent_cols = qw(branchpath change parent_branchpath
 				    parent_change ref manual);
 	my $add_parent = $o->{add_parent} ||= sub {
+		my $row = shift;
+		$show_parent->($row);
+
 		$add_parent_sth ||= $dbh->prepare(<<SQL);
 insert into change_parents
 	(${\(join ", ", @change_parent_cols)})
@@ -1045,7 +1125,11 @@ SQL
 		mutter "saving new parent: "
 			.join(",",map{defined($_)?$_:"NULL"}@_)
 				if $VERBOSE >= 1;
-		$add_parent_sth->execute(@_);
+		my @row;
+		for my $col ( @change_parent_cols ) {
+			push @row, $row->{$col};
+		}
+		$add_parent_sth->execute(@row);
 	};
 	my $add_change_branch_sth;
 	my $add_change_branch = $o->{add_change_branch} ||= sub {
@@ -1067,11 +1151,18 @@ SQL
 	};
 	# derive extra parents if necessary
         for my $path ( sort keys %by_path_chg_obj ) {
+		$add_change_branch->($path, $change)
+			unless $curr_paths{$path};
 		my $PcO = $by_path_chg_obj{$path};
-		my $POc = $by_path_chg_obj{$path};
+		my $POc = $by_path_obj_chg{$path};
 		my $parents = $parents{$path}||[];
 		if ( grep { $_->{manual} } @$parents ) {
 			$parents = [ grep { $_->{manual} } @$parents ];
+		}
+		if ( $know_parents ) {
+			for ( @$parents ) {
+				$show_parent->($_);
+			}
 		}
 
 		my $info = {};
@@ -1089,23 +1180,21 @@ SQL
 				derive_branch_src $path, $PcO
 					=> $new_change_parents;
 			}
-			$add_change_branch->($path, $change);
 		}
 		elsif ( grep { length } keys %$POc ) {
 			# some inter-branch action.
 			if ( !$know_parents ) {
 				derive_extra_parents $path, $PcO, $POc,
+					\%prev_paths,
 					=> $new_change_parents;
 			}
 		}
 		else {
-			unless ($prev_paths{$path} == $change) {
-				$add_change_branch->($path, $change);
-			}
 			if ( !$know_parents ) {
 				$new_change_parents->
 					({ branchpath => $path,
 					   parent_branchpath => $path,
+					   manual => 0,
 					   parent_change => $prev_paths{$path},
 					 });
 			}
@@ -1113,26 +1202,9 @@ SQL
 		$show_change_detail->($path, $PcO, $info);
 		if ( !$know_parents ) {
 			for my $row (@ncp) {
-				my @row;
-				for my $col ( @change_parent_cols ) {
-					push @row, $row->{$col};
-				}
-				$add_parent->(@row);
+				$add_parent->($row);
 			}
-		}
-		elsif ( @$parents ) {
-			for ( @$parents ) {
-				print "Parent: ",
-					(($_->{ref} ? "$_->{ref}"
-					  : ("$_->{parent_branchpath}\@"
-					     ."$_->{parent_change}")),
-					 ((!$_->{ref}&&$_->{manual})
-					  ? " (manual)" : ""),
-					 "\n");
-			}
-		}
-		else {
-			print "New root.\n";
+			@ncp=();
 		}
 	}
 }
@@ -1143,7 +1215,7 @@ sub show_chg {
 
 	print "\t\t";
 	my $filename = substr $chg->{depotpath}, length $path;
-	if ( $chg->{int_title} ) {
+	if ( $chg->{int_obj_title} ) {
 		my $odr = _p4_disp_rev
 			($chg->{int_obj_min}, $chg->{int_obj_max});
 		my $sdr = _p4_disp_rev
@@ -1159,7 +1231,9 @@ sub show_chg {
 			$sdr .= "(HEAD)";
 		}
 
-		print "...$filename: $sdr $chg->{int_title} $odr\n";
+		print "...$filename: $sdr $chg->{int_obj_title} "
+			.($odr ne "#$chg->{revision}" ? "$odr" : "us"),
+				"\n";
 	}
 	else {
 		print "...$filename\n";
@@ -1638,7 +1712,6 @@ sub parse_export_opts {
 		my @gfi_options;
 		getopt("n=i" => \$export_opts{chunk_size},
 		       "depth=i" => \$export_opts{depth},
-		       },
 		      );
 		@_ = @ARGV;
 	}
