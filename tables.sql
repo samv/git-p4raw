@@ -176,6 +176,8 @@ create table change_parents (
 
 	ref TEXT null,
 	manual boolean,
+	all_headrev boolean NULL,
+	none_unseen boolean NULL,
 
 	CHECK (
 		((parent_change is not null and parent_branchpath is not null)

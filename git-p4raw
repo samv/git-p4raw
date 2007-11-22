@@ -762,56 +762,40 @@ sub derive_extra_parents {
 
 	my $root_changes = delete $POc->{""};
 
+	$callback->({ branchpath => $path,
+		      parent_branchpath => $path,
+		      parent_change => $prev->{$path},
+		      manual => 0 });
+
+	# warn for octopus and evil merges
 	if ( keys %$POc > 1 ) {
-		print "multiple sources for this merge:  @{[map { $_||$path} keys %$POc]}\n";
-		# well, we could write an Octopus merge, but it would
-		# be an /EVIL/ Octopus merge ("Shoggoth")
-		print "cowardly refusing to write an Octopus\n";
-		if ( $root_changes ) {
-			$callback->({ branchpath => $path,
-				      parent_branchpath => $path,
-				      parent_change => $prev->{$path},
-				      manual => 0 });
-		}
+		print( ($root_changes ? "Shoggoth" : "Octopus")
+		       ." merge of: @{[map { $_||$path} keys %$POc]}\n" );
 	}
-	else {
-		my ($source_path, $chg_info) = %$POc;
+	elsif ( $root_changes ) {
+		print "This is an EVIL merge\n";
+	}
+
+	# add all parents
+	while ( my ($source_path, $chg_info) = each %$POc ) {
+
+		my ($all_headrev, $none_unseen, $change );
+		my $change = max map { $_->{int_subj_max_change}||-1 }
+			map { @$_ } map { values %$_ }
+				values %$chg_info;
 		if ( !grep { !$_->{int_subj_headrev} }
 		     map { @$_ } map { values %$_ }
 		     values %$chg_info ) {
-			# looks like a cross-merge, but 
-			$DB::single = 1;
-			print "probably a cross-merge from $source_path\@".$prev->{$source_path}." but need to check with merge base algo.\n";
-			$callback->({ branchpath => $path,
-				      parent_branchpath => $path,
-				      parent_change => $prev->{$path},
-				      manual => 0 });
-			$callback->({ branchpath => $path,
-				      parent_branchpath => $source_path,
-				      parent_change => $prev->{$source_path},
-				      manual => 0 });
+			$all_headrev = 1;
+			$change = $prev->{$source_path};
 		}
-		else {
-			# well this might still be a cross-merge, but
-			# of an old revision.
-			my $max = max values %$prev;
-			my $max_change = max map { $_->{int_subj_max_change}||-1 }
-				map { @$_ } map { values %$_ }
-					values %$chg_info;
-			$DB::single = 1;
-			print "possibly a cross-merge from $source_path\@$max_change but need to check with merge base algo.\n";
-			if ( $root_changes ) {
-				$callback->({ branchpath => $path,
-					      parent_branchpath => $path,
-					      parent_change => $prev->{$path},
-					      manual => 0 });
-			}
-			#j$callback->({ branchpath => $path,
-				      #jparent_branchpath => $source_path,
-				      #jparent_change => (max map { $_->{int_change} }
-							#jvalues %$chg_info),
-				      #jmanual => 0 });
-		}
+
+		$callback->({ branchpath => $path,
+			      parent_branchpath => $path,
+			      parent_change => $change,
+			      all_headrev => $all_headrev,
+			      none_unseen => $none_unseen,
+			      manual => 0 });
 	}
 }
 
@@ -1111,7 +1095,8 @@ SQL
 
 	my $add_parent_sth;
 	my @change_parent_cols = qw(branchpath change parent_branchpath
-				    parent_change ref manual);
+				    parent_change ref manual all_headrev
+				    none_unseen);
 	my $add_parent = $o->{add_parent} ||= sub {
 		my $row = shift;
 		$show_parent->($row);
