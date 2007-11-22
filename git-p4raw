@@ -736,11 +736,11 @@ sub do_describe {
 
 sub derive_branch_src {
 	my $path = shift;
-	my $pc = shift;
+	my $PcO = shift;
 	my $callback = shift;
-	my $branches = $pc->{branch};
+	my $branches = $PcO->{branch};
 	if ( keys %$branches > 1 ) {
-		moan "multiple branch sources, not doing anything";
+		moan "multiple branch sources for $path, erp!";
 	}
 	else {
 		my ($source_path, $info) = %$branches;
@@ -754,8 +754,10 @@ sub derive_branch_src {
 
 sub derive_extra_parents {
 	my $path = shift;
-	my $pc = shift;
+	my $PcO = shift;
+	my $POc = shift;
 	my $callback = shift;
+
 	my $integes = $pc->{integrate};
 	$DB::single = 1;
 	moan "yeah yeah";
@@ -978,8 +980,8 @@ SQL
 		$add_path->();
 	}
 
-	# ok, now group them by path, change type and integration branch
-	my (%by_path);
+	# ok, now group them by path and integration branch, and change type
+	my (%by_path_chg_obj, %by_path_obj_chg);
 	my @change_details;
 	for my $row ( @revcxs ) {
 		{ no warnings;
@@ -1003,7 +1005,7 @@ SQL
 				moan "no, that'll shadow something, use $op instead";
 			};
 		}
-		my $c_d = $by_path{$path}{$row->{change_title}}{$op}
+		my $c_d = $by_path_chg_obj{$path}{$row->{change_title}}{$op}
 			||= do {
 			my $change_detail =
 				{ branchpath => $path,
@@ -1014,6 +1016,7 @@ SQL
 			push @change_details, $change_detail;
 			$change_detail;
 		};
+		$by_path_obj_chg{$path}{$op}{$row->{change_title}} = $c_d;
 		push @{$c_d->{revcxs}}, $row;
 	}
 
@@ -1063,8 +1066,9 @@ SQL
 		$change_parents->($row);
 	};
 	# derive extra parents if necessary
-        for my $path ( sort keys %by_path ) {
-		my $pc = $by_path{$path};
+        for my $path ( sort keys %by_path_chg_obj ) {
+		my $PcO = $by_path_chg_obj{$path};
+		my $POc = $by_path_chg_obj{$path};
 		my $parents = $parents{$path}||[];
 		if ( grep { $_->{manual} } @$parents ) {
 			$parents = [ grep { $_->{manual} } @$parents ];
@@ -1073,30 +1077,24 @@ SQL
 		my $info = {};
 		if ( !exists $prev_paths{$path} ) {
 			$info->{new} = 1;
-			if ( exists $pc->{integrate} or
-			     exists $pc->{delete} or
-			     exists $pc->{edit}
+			if ( exists $PcO->{integrate} or
+			     exists $PcO->{delete} or
+			     exists $PcO->{edit}
 			   ) {
 				moan "new path $path has new changes, odd";
 				$info->{invalid} = 1;
 			}
-			if ( !$know_parents and $pc->{branch} ) {
+			if ( !$know_parents and $PcO->{branch} ) {
 				# derive the branch's parent
-				derive_branch_src $path, $pc
+				derive_branch_src $path, $PcO
 					=> $new_change_parents;
 			}
 			$add_change_branch->($path, $change);
 		}
-		elsif ( exists $pc->{branch} ) {
-			# cross-branch copy?
-			$DB::single = 1;
-			1;
-		}
-		elsif ( exists $pc->{integrate} ) {
-			# might be a cross-merge.
-			$DB::single = 1;
+		elsif ( grep { length } keys %$POc ) {
+			# some inter-branch action.
 			if ( !$know_parents ) {
-				derive_extra_parents $path, $pc
+				derive_extra_parents $path, $PcO, $POc,
 					=> $new_change_parents;
 			}
 		}
@@ -1112,7 +1110,7 @@ SQL
 					 });
 			}
 		}
-		$show_change_detail->($path, $pc, $info);
+		$show_change_detail->($path, $PcO, $info);
 		if ( !$know_parents ) {
 			for my $row (@ncp) {
 				my @row;
