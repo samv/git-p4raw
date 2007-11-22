@@ -175,7 +175,7 @@ create table change_parents (
 	parent_change int null,
 
 	ref TEXT null,
-	manual boolean,
+	manual boolean NOT NULL default true,
 	all_headrev boolean NULL,
 	none_unseen boolean NULL,
 
