@@ -1637,7 +1637,10 @@ sub parse_export_opts {
 	my %export_opts;
 	{
 		@ARGV = @_;
+		my @gfi_options;
 		getopt("n=i" => \$export_opts{chunk_size},
+		       "depth=i" => \$export_opts{depth},
+		       },
 		      );
 		@_ = @ARGV;
 	}
@@ -1672,7 +1675,7 @@ sub do_export_blobs {
 
 	my %export_opts = parse_export_opts($dbh, "blobs", @_);
 
-	gfi_open();
+	gfi_open(\%export_opts);
 
 	export_blob_chunk($dbh, \%export_opts);
 }
@@ -1680,9 +1683,12 @@ sub do_export_blobs {
 our $MARKS_FILE;
 
 sub gfi_open {
+	my $eo = shift;
 	$MARKS_FILE ||= "p4raw.$$.marks";
 	if ( -t STDOUT ) {
 		open GFI, "|git fast-import "
+			.($eo->{gfi_options}||"")
+			.($eo->{depth}?"--depth=$eo->{depth} ":"")
 			."--export-marks=$MARKS_FILE"
 				or barf "popen gfi failed; $!";
 	}
@@ -2238,6 +2244,21 @@ If you start C<git fast-import>, you must take care to pass
 C<--export-marks> to it if you want to perform subsequent import runs.
 Also you will need to remove the foreign key constraints on rev_marks
 and change_marks.
+
+=head3 export common options
+
+=over
+
+=item C<-n=INT>
+
+Size of a "chunk" for export.
+
+=item C<--depth=N>
+
+Specify the delta depth.  If you are working on projects with a long
+history this can save a lot of space.  Good for archives of old history.
+
+=back
 
 =back
 
