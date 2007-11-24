@@ -2123,6 +2123,141 @@ sub do_find_branches {
 	}
 }
 
+sub check_branchpath {
+	my $dbh = shift;
+	my $branchpath = shift;
+	my $change = shift;
+	my $sth = $dbh->prepare(<<SQL.($change?<<SQL:""));
+select
+	max(change)
+from
+	change_branches
+where
+	branchpath = ?
+SQL
+and	change = ?
+SQL
+	$sth->execute($branchpath, ($change?($change):()));
+	($change) = $sth->fetchrow_array;
+	$change;
+}
+
+use Set::Object qw(set);
+
+sub find_merge_base {
+	my $dbh = shift;
+	my @places = @_;
+
+	my $max_change = max map { $_->[1] } @places;
+
+	# slurp in change_parents
+	my $sth = $dbh->prepare(<<SQL);
+select
+	*
+from
+	change_parents c
+where
+	change <= ? and
+	(manual or (not manual and
+		not exists (select true from change_parents c2
+			where c2.change = c.change and c2.manual)))
+SQL
+	$sth->execute($max_change);
+	my @cp;
+	while ( my $row = $sth->fetchrow_hashref ) {
+		push @cp, $row;
+	}
+	my %cp;
+	for ( @cp ) {
+		my $where = $_->{branchpath}."@".$_->{change};
+		my $list = $cp{$where} ||= [];
+		push @$list, $_;
+	}
+
+	# the merge base is the latest plane across the ancestry DAG
+	# which is mergable from all the starting points.
+	my @start = map { join '@', @$_ } @places;
+	my %parent_of = map { $_ => {$_=>1} } @start;
+	my %seen = map { $_ => 0 } @start;
+
+	my $sortfunc = sub {
+		my ($c_a) = ($_[0] =~ m{@(\d+)$});
+		my ($c_b) = ($_[1] =~ m{@(\d+)$});
+		($c_b <=> $c_a)
+	};
+	my @interesting = sort { $sortfunc->($a, $b) } keys %seen;
+	my %bases;
+	while ( my $item = shift @interesting ) {
+
+		my @parents;
+		unless ( $item eq '@0' ) {
+			@parents = map {
+				$_->{parent_branchpath}."@".$_->{parent_change}
+			} @{$cp{$item}};
+			if ( !@parents ) {
+				@parents = '@0';
+			}
+		}
+		whisper "parents of $item are: @parents" if $VERBOSE > 1;
+
+		my @parent_of;
+		for my $tip ( @start ) {
+			if ( $parent_of{$tip}{$item} ) {
+				whisper "$item seen by branch $tip" if $VERBOSE > 1;
+				push @parent_of, $tip;
+				for ( @parents ) {
+					$parent_of{$tip}{$_}++;
+				}
+			}
+		}
+		whisper "seen by branches: @parent_of" if $VERBOSE > 1;
+
+		if ( @parent_of == @start ) {
+			# merge base
+			$bases{$item}++;
+			whisper "making $item a merge base." if $VERBOSE > 1;
+		}
+		elsif ( @parent_of ) {
+			push @interesting,
+				(grep { !$seen{$_}++ }
+				 @parents);
+			@interesting = sort { $sortfunc->($a, $b) }
+				@interesting;
+		}
+
+		$seen{$item}++;
+	}
+
+	return map { [ m{(.*)@(\d+)$} ] } keys %bases;
+}
+
+sub do_merge_base {
+	my $dbh = shift;
+
+	my @places;
+
+	while ( my $item = shift ) {
+		my ($branchpath, $change) =
+			($item =~ m{^(//.*?)(?:\@(\d+))?$})
+				or abort "expecting branch paths, not '$item'";
+
+		$change = check_branchpath($dbh, $branchpath, $change)
+			or barf "'$item' is not a valid branchpath";
+
+		push @places, [ $branchpath, $change ];
+	}
+
+	my (@bases) = find_merge_base($dbh, @places);
+
+	if ( @bases ) {
+		say "merge base: ".join(", ", map { join '@', @$_ } @bases);
+	}
+	else {
+		say "no valid merge base";
+		exit 1;
+	}
+}
+
 	# 5. finally, we have rev_blob rows for all of the files
 	#    in this version, so send a tree and/or commit object
 	#    (though it might be easier to use
@@ -2436,6 +2571,33 @@ Specify a change number with C<-c NUM>.
 
 Show the contents of a particular Perforce path at particular
 change.  Defaults to the latest change.
+
+=item C<git-p4raw merge-base branch[@CHANGE] branch[@CHANGE] [...]>
+
+Find the merge base of the passed changes.  Returns a list of change
+paths and change numbers.
+
+The returned list (hopefully) has the following properties:
+
+=over
+
+=item *
+
+Every one of the passed branches are descended from all of the
+returned bases.
+
+=item *
+
+None of the passed branches have any parents which are not descended
+from or a parent of one of the returned changes.
+
+=item *
+
+There are no other lists which satisfy the above properties, where one
+or more of the items of the list is a descendent of one of the
+returned items, B<and> all of the other items are descended from it.
+
+=back
 
 =item C<git-p4raw annotate file[revRange]> (TODO)
 
