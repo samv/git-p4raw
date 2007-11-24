@@ -724,13 +724,50 @@ sub do_describe {
 		};
 		$desc_opts{add_parent} = sub {
 			my $row = shift;
+			my $bad;
+			if ( defined $row->{none_unseen} and
+			     ! $row->{none_unseen}) {
+				$bad = 1;
+			}
 			print "action: add $row->{parent_branchpath}\@"
 				.("$row->{parent_change} as a parent of"
-				  ." $row->{branchpath}\n");
+				  ." $row->{branchpath}"
+				  .($bad ? " (BAD MERGE)" : "")
+				  ."\n");
 		};
 	}
 
+	$dbh->begin_work;
 	change_stats($dbh, $change, \%desc_opts);
+	$dbh->commit;
+}
+
+sub change_branches_max_iter {
+	my $dbh = shift;
+	my $change = shift;
+	my $sth = $dbh->prepare(<<SQL);
+select
+	branchpath,
+	max(change) as change
+from
+	change_branches
+where
+	change < ?
+group by
+	branchpath
+union
+select
+	branchpath,
+	change
+from
+	change_branches
+where
+	change = ?
+SQL
+	$sth->execute( ($change) x 2 );
+	return sub {
+		$sth->fetchrow_hashref;
+	};
 }
 
 sub derive_branch_src {
@@ -752,7 +789,9 @@ sub derive_branch_src {
 }
 
 sub derive_extra_parents {
+	my $dbh = shift;
 	my $path = shift;
+	my $change = shift;
 	my $PcO = shift;
 	my $POc = {%{+shift}};
 	my $prev = shift;
@@ -785,20 +824,86 @@ sub derive_extra_parents {
 	# add all parents
 	while ( my ($source_path, $chg_info) = each %$POc ) {
 
-		my ($all_headrev, $none_unseen, $change );
-		$change = max map { $_->{int_subj_max_change}||-1 }
+		my ($all_headrev, $none_unseen, $o_change );
+		$o_change = max map { $_->{int_subj_max_change}||-1 }
 			map { @$_ } map { values %$_ }
 				values %$chg_info;
 		if ( !grep { !$_->{int_subj_headrev} }
 		     map { @$_ } map { values %$_ }
 		     values %$chg_info ) {
 			$all_headrev = 1;
-			$change = $prev->{$source_path};
+			$o_change = $prev->{$source_path};
+		}
+
+		# prepare a list of relative paths that are integrated
+		# by this change.
+		my %integrated;
+		while ( my ($type, $c_d) = each %{$POc->{$source_path}} ) {
+			for my $revcx ( @{ $c_d->{revcxs} } ) {
+				my $relpath = $revcx->{int_obj};
+				$relpath =~ s{^\Q$source_path\E/}{} &&
+					($integrated{$relpath}++);
+			}
+		}
+		# now here's the fancy-pants stuff.  Find the merge base...
+		my (@mb) = find_merge_base
+			($dbh,
+			 [ $path, $prev->{$path} ],
+			 [ $source_path, $o_change ]);
+		print "merge base of $path\@$prev->{$path} and "
+			.("$source_path\@$o_change is "
+			  ."@{[ map { join '@', @$_ } @mb ]}\n");
+
+		# ... then try a 3-way merge with each of the merge bases ...
+		my $left = index_for_version($dbh, $path, $change);
+		my $right = index_for_version($dbh, $source_path, $o_change);
+		$none_unseen = 1;
+		my $count = 0;
+		for my $mb ( @mb ) {
+			my $base = index_for_version($dbh, @$mb);
+			my @changed = grep {
+				!(index_eq($right->{$_}, $base->{$_})
+				  or index_eq($right->{$_}, $left->{$_}))
+			} keys %{{ %$right, %$base }};
+			print "there were ".@changed." path(s) changed "
+				.("between $mb->[0]\@$mb->[1] and "
+				  ."$source_path\@$o_change\n");
+
+			for my $relpath ( @changed ) {
+				if ( !exists $integrated{$relpath} ) {
+					print("path $relpath ",
+					      index_diff
+					      ($base->{$relpath},
+					       $right->{$relpath}),
+					      " in $source_path but not in ",
+					      $path);
+					my $hmm;
+					$DB::single = 1 if $change == 77;
+					if ( my $x = $root_changes ) {
+						if ( my $i = $x->{integrate} ) {
+							for my $rcx ( @{$i->{revcxs}} ) {
+								if ( $rcx->{depotpath} eq "$path/$relpath" ) {
+									print " but unspec. integration found, so OK";
+									$hmm = 1;
+								}
+							}
+						}
+					}
+					$none_unseen = 0 unless $hmm;
+					print "\n";
+				}
+				else {
+					$count++;
+				}
+			}
+		}
+		if ( $none_unseen ) {
+			print "Confirmed $count differences all integrated - it's a merge!\n";
 		}
 
 		$callback->({ branchpath => $path,
 			      parent_branchpath => $source_path,
-			      parent_change => $change,
+			      parent_change => $o_change,
 			      all_headrev => $all_headrev,
 			      none_unseen => $none_unseen,
 			      @extra,
@@ -908,30 +1013,11 @@ SQL
 	$sth->finish;
 
 no_header:
-	$sth = $dbh->prepare(<<SQL);
-select
-	branchpath,
-	max(change) as change
-from
-	change_branches
-where
-	change < ?
-group by
-	branchpath
-union
-select
-	branchpath,
-	change
-from
-	change_branches
-where
-	change = ?
-SQL
-	$sth->execute(($change) x 2);
-	while ( my $row = $sth->fetchrow_hashref ) {
+	my $iter = change_branches_max_iter($dbh, $change);
+	while ( my $row = $iter->() ) {
 		$prepare_paths->($row);
 	}
-	$sth->finish;
+	undef($iter);
 
 	my $know_parents;
 	$sth = $dbh->prepare(<<SQL);
@@ -1097,6 +1183,9 @@ SQL
 			     ."$row->{parent_change}")),
 			 ((!$row->{ref}&&$row->{manual})
 			  ? " (manual)" : ""),
+			 ((defined($row->{none_unseen})&&!$row->{none_unseen})
+			  ? " (tenuous)" : ""),
+			 ($row->{evil} ? " (EVIL)" : ""),
 			 "\n");
 	};
 
@@ -1117,7 +1206,7 @@ SQL
 			push @row, $row->{$col};
 		}
 		mutter "saving new parent:\n"
-			.join("\n", map { "\t$_: $row->{$_}" }
+			.join("\n", map { "\t$_: ".(defined($row->{$_})?$row->{$_}:"NULL") }
 			      sort keys %$row)
 			if $VERBOSE >= 1;
 		$add_parent_sth->execute(@row);
@@ -1179,7 +1268,8 @@ SQL
 		elsif ( grep { length && $_ ne $path } keys %$POc ) {
 			# some inter-branch action.
 			if ( !$know_parents ) {
-				derive_extra_parents $path, $PcO, $POc,
+				derive_extra_parents $dbh, $path, $change,
+					$PcO, $POc,
 					\%prev_paths,
 					=> $new_change_parents;
 			}
@@ -1537,6 +1627,11 @@ sub sha1_blob_ref {
 	return lc($sha1->hexdigest);
 }
 
+sub _p4_type_to_mode {
+	my $p4_type = shift;
+	($p4_type & P4_TYPE_EXEC ? 0100755 : 0100644);
+}
+
 sub show_files {
 	my $dbh = shift;
 	my $path = shift;
@@ -1571,8 +1666,7 @@ sub show_files {
 			# don't show trees yet
 			printf( "%6o %s %s".($o->{length}?" %7d":"")
 				."\t%s\n",
-				($row->{file_type} & P4_TYPE_EXEC
-				 ? 0100755 : 0100644),
+				_p4_type_to_mode($row->{file_type}),
 				"blob",
 				($o->{blob}
 				 ? substr($b,0,$a)
@@ -1626,6 +1720,69 @@ SQL
 
 	while ( my $row = $sth->fetchrow_hashref ) {
 		$output->($row);
+	}
+}
+
+sub index_for_version {
+	my $dbh = shift;
+	my $path = shift;
+	my $change = shift;
+	my %index;
+	show_files($dbh, $path, $change,
+		   { blob => 1,
+		     recurse => 1,
+		     output => sub {
+			     my $row = shift;
+			     (my $relative = $row->{depotpath})
+				     =~ s{^\Q$path\E/?}{};
+
+			     $index{$relative} =
+				     [ $row->{md5sum}, $row->{mark},
+				       $row->{blobid} ];
+		     },
+		   });
+	return \%index;
+}
+
+sub index_eq {
+	my $idx_a = shift;
+	my $idx_b = shift;
+	if ( !$idx_a and !$idx_b ) {
+		return 1;
+	}
+	if ( !$idx_a or !$idx_b ) {
+		return 0;
+	}
+	if ( $idx_a->[2] and $idx_b->[2] ) {
+		$idx_a->[2] eq $idx_b->[2];
+	}
+	elsif ( $idx_a->[1] and $idx_b->[1] and
+		$idx_a->[1] == $idx_b->[1] ) {
+		return 1;
+	}
+	elsif ( $idx_a->[0] and $idx_b->[0] ) {
+		$idx_a->[0] eq $idx_b->[0];
+	}
+	else {
+		moan "Can't compare index entries; (@$idx_a) vs (@$idx_b)";
+		0;
+	}
+}
+
+sub index_diff {
+	my $base = shift;
+	my $newer = shift;
+	if ( !$base and $newer ) {
+		return "added";
+	}
+	elsif ( $base and !$newer ) {
+		return "deleted";
+	}
+	elsif ( index_eq($base, $newer) ) {
+		return "unchanged";
+	}
+	else {
+		return "changed";
 	}
 }
 
@@ -2119,6 +2276,7 @@ sub do_find_branches {
 			     { compact => 1,
 			     },
 			    );
+		print "\n";
 		$dbh->commit;
 	}
 }
@@ -2160,7 +2318,8 @@ where
 	change <= ? and
 	(manual or (not manual and
 		not exists (select true from change_parents c2
-			where c2.change = c.change and c2.manual)))
+			where c2.change = c.change and c2.manual))) and
+	(c.none_unseen is null or c.none_unseen = true)
 SQL
 	$sth->execute($max_change);
 	my @cp;
