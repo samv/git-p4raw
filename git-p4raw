@@ -2114,10 +2114,12 @@ sub do_find_branches {
 
 	say "finding branches for $export_opts{chunk_size} changes";
 	for my $change ( $export_opts{min} .. $export_opts{max} ) {
+		$dbh->begin_work;
 		change_stats($dbh, $change,
 			     { compact => 1,
 			     },
 			    );
+		$dbh->commit;
 	}
 }
 
