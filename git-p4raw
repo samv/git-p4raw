@@ -739,12 +739,10 @@ sub derive_branch_src {
 	my $callback = shift;
 	my $branches = $PcO->{branch};
 	if ( keys %$branches > 1 ) {
-		$DB::single = 1;
 		print "multiple branch sources for $path, erp!";
 		print "Too many parents: @{[ map{ $_||$path } keys %$branches ]}\n";
 	}
-	else {
-		my ($source_path, $info) = %$branches;
+	while ( my ($source_path, $info) = each %$branches ) {
 		$callback->({ branchpath => $path,
 			      parent_branchpath => $source_path,
 			      parent_change => $info->{int_change},
@@ -756,11 +754,15 @@ sub derive_branch_src {
 sub derive_extra_parents {
 	my $path = shift;
 	my $PcO = shift;
-	my $POc = shift;
+	my $POc = {%{+shift}};
 	my $prev = shift;
 	my $callback = shift;
 
 	my $root_changes = delete $POc->{""};
+	my $confused_changes = delete $POc->{$path};
+	my $has_changes = !!($root_changes || $confused_changes);
+	my @extra;
+	push @extra, evil => 1 if $has_changes;
 
 	$callback->({ branchpath => $path,
 		      parent_branchpath => $path,
@@ -769,10 +771,14 @@ sub derive_extra_parents {
 
 	# warn for octopus and evil merges
 	if ( keys %$POc > 1 ) {
-		print( ($root_changes ? "Shoggoth" : "Octopus")
+		print( ($has_changes ? "Shoggoth" : "Octopus")
 		       ." merge of: @{[map { $_||$path} keys %$POc]}\n" );
+		push @extra, octopus => 1;
 	}
-	elsif ( $root_changes ) {
+	elsif ( !keys %$POc ) {
+		print "Intra-branch integrate.  Sick.\n";
+	}
+	elsif ( $has_changes ) {
 		print "This is an EVIL merge\n";
 	}
 
@@ -780,7 +786,7 @@ sub derive_extra_parents {
 	while ( my ($source_path, $chg_info) = each %$POc ) {
 
 		my ($all_headrev, $none_unseen, $change );
-		my $change = max map { $_->{int_subj_max_change}||-1 }
+		$change = max map { $_->{int_subj_max_change}||-1 }
 			map { @$_ } map { values %$_ }
 				values %$chg_info;
 		if ( !grep { !$_->{int_subj_headrev} }
@@ -791,10 +797,11 @@ sub derive_extra_parents {
 		}
 
 		$callback->({ branchpath => $path,
-			      parent_branchpath => $path,
+			      parent_branchpath => $source_path,
 			      parent_change => $change,
 			      all_headrev => $all_headrev,
 			      none_unseen => $none_unseen,
+			      @extra,
 			      manual => 0 });
 	}
 }
@@ -1094,26 +1101,25 @@ SQL
 	};
 
 	my $add_parent_sth;
-	my @change_parent_cols = qw(branchpath change parent_branchpath
-				    parent_change ref manual all_headrev
-				    none_unseen);
 	my $add_parent = $o->{add_parent} ||= sub {
 		my $row = shift;
 		$show_parent->($row);
 
-		$add_parent_sth ||= $dbh->prepare(<<SQL);
+		my @cols = keys %$row;
+		$add_parent_sth = $dbh->prepare(<<SQL);
 insert into change_parents
-	(${\(join ", ", @change_parent_cols)})
+	(${\(join ", ", @cols)})
 values
-	(${\(join ", ", ("?") x @change_parent_cols)})
+	(${\(join ", ", ("?") x @cols)})
 SQL
-		mutter "saving new parent: "
-			.join(",",map{defined($_)?$_:"NULL"}@_)
-				if $VERBOSE >= 1;
 		my @row;
-		for my $col ( @change_parent_cols ) {
+		for my $col ( @cols ) {
 			push @row, $row->{$col};
 		}
+		mutter "saving new parent:\n"
+			.join("\n", map { "\t$_: $row->{$_}" }
+			      sort keys %$row)
+			if $VERBOSE >= 1;
 		$add_parent_sth->execute(@row);
 	};
 	my $add_change_branch_sth;
@@ -1149,6 +1155,8 @@ SQL
 				$show_parent->($_);
 			}
 		}
+		my $has_other_paths = grep { length && $_ ne $path }
+			keys %$POc;
 
 		my $info = {};
 		if ( !exists $prev_paths{$path} ) {
@@ -1157,16 +1165,18 @@ SQL
 			     exists $PcO->{delete} or
 			     exists $PcO->{edit}
 			   ) {
-				moan "new path $path@\$change has non-new changes, odd";
+				moan "new path $path\@$change has non-new changes, odd";
 				$info->{invalid} = 1;
 			}
-			if ( !$know_parents and $PcO->{branch} ) {
+			if ( !$know_parents and $PcO->{branch} and
+			     $has_other_paths
+			   ) {
 				# derive the branch's parent
 				derive_branch_src $path, $PcO
 					=> $new_change_parents;
 			}
 		}
-		elsif ( grep { length } keys %$POc ) {
+		elsif ( grep { length && $_ ne $path } keys %$POc ) {
 			# some inter-branch action.
 			if ( !$know_parents ) {
 				derive_extra_parents $path, $PcO, $POc,

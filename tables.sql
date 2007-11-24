@@ -178,6 +178,8 @@ create table change_parents (
 	manual boolean NOT NULL default true,
 	all_headrev boolean NULL,
 	none_unseen boolean NULL,
+	octopus boolean NOT NULL DEFAULT false,
+	evil boolean NOT NULL default false,
 
 	CHECK (
 		((parent_change is not null and parent_branchpath is not null)
