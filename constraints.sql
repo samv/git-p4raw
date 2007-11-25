@@ -32,6 +32,9 @@ alter table change_parents add constraint change_branchpath_valid
 alter table change_parents add constraint change_parents_valid
       foreign key (parent_branchpath, parent_change)
       references change_branches(branchpath, change);
+create unique index change_parents_sanity
+       on change_parents(change, branchpath, parent_branchpath,
+       parent_change, manual);
 
 -- create indexes
 create index integed_change_idx on integed (change);
