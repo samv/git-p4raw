@@ -841,11 +841,13 @@ sub derive_extra_parents {
 		# prepare a list of relative paths that are integrated
 		# by this change.
 		my %integrated;
+		my $integed_c;
 		while ( my ($type, $c_d) = each %{$POc->{$source_path}} ) {
 			for my $revcx ( @{ $c_d->{revcxs} } ) {
 				my $relpath = $revcx->{int_obj};
 				$relpath =~ s{^\Q$source_path\E/}{} &&
 					($integrated{$relpath}++);
+				$integed_c++;
 			}
 		}
 		# now here's the fancy-pants stuff.  Find the merge base...
@@ -863,20 +865,20 @@ sub derive_extra_parents {
 		$none_unseen = 1;
 		my $count = 0;
 		my $moan_count = 0;
-		my $likeliness;
 		my %unseen;
 		my %obvious;
 		for my $mb ( @mb ) {
 			my $base = index_for_version($dbh, @$mb);
-			my $obvious = 0;
 			my @changed = grep {
-				!(index_eq($right->{$_}, $base->{$_})
-				  or (index_eq($right->{$_}, $left->{$_})
-				      && do {
-					      $obvious{$_}++;
-					      ++$obvious;
-				      }))
-			} keys %{{ %$right, %$base }};
+				!index_eq($right->{$_}, $base->{$_})
+					and !( (index_eq($right->{$_}, $left->{$_})
+						#||
+						#index_eq($left->{$_}, $base->{$_}))
+					       )
+					       && do {
+						       $obvious{$_}++;
+					       })
+				} keys %{{ %$right, %$base }};
 			print "there were ".@changed." path(s) changed "
 				.("between $mb->[0]\@$mb->[1] and "
 				  ."$source_path\@$o_change\n");
@@ -889,8 +891,11 @@ sub derive_extra_parents {
 					      index_diff
 					      ($base->{$relpath},
 					       $right->{$relpath}),
-					      " in $source_path but not in ",
-					      $path)
+					      " in $source_path but ",
+					      index_diff
+					      ($base->{$relpath},
+					       $left->{$relpath}),
+					      " in ", $path)
 						unless ++$moan_count > 10;
 					my $hmm;
 					$DB::single = 1 if $change == 77;
@@ -917,34 +922,41 @@ sub derive_extra_parents {
 			if ( $moan_count > 10 ) {
 				print "(total of $bad files not listed)\n"
 			}
-			if ( @changed ) {
-				$likeliness += ($obvious + @changed - $bad)
-					/ (@changed + $obvious);
-			}
-			else {
-				$likeliness++;
-			}
 		}
 		if ( $none_unseen ) {
 			print "Confirmed $count differences all integrated - it's a merge!\n";
 		}
 		else {
-			my $pc = sprintf "%d", (($likeliness/@mb)*100);
-			my $adj = ($pc > 95 ? "an overwhelming" :
-				   $pc > 80 ? "a massive" :
-				   $pc > 50 ? "about" :
-				   $pc > 20 ? "only" :
-				   $pc > 5  ? "a meagre " : "a pathetic");
 			my $seen = keys %integrated;
 			my $unseen = keys %unseen;
+			my $total = $seen + $unseen;
 			my $bo = keys %obvious;
-			print <<THIS;
+			my $s_b_o = keys %{{ %obvious, %integrated }};
+			my $dis = $total - $s_b_o;
+			my $pc = sprintf "%d", (($s_b_o)/($s_b_o+$unseen))*100;
+			my $adj = sub {
+				\($_[0] > 95 ? "an overwhelming" :
+				 $_[0] > 80 ? "a massive" :
+				 $_[0] > 50 ? "about" :
+				 $_[0] > 20 ? "only" :
+				 $_[0] > 5  ? "a meagre" : "a pathetic");
+			};
+			my $o_pc = sprintf "%d", $seen/$total * 100;
+			use Text::Wrap;
+			$Text::Wrap::columns = 72;
+			whisper "seen: $seen, unseen: $unseen, bo: $bo, pc:$pc opc:$o_pc, integed: $integed_c";
+			print map { my $x = $_; $x =~ s{\n}{ }g;
+				    wrap("","",$x)."\n\n" } split /\n\n/, <<THIS;
 
-If this change was a merge, it seemed to miss $unseen path(s).
+Was this change was a merge in the git sense?
 
-That means $adj ${pc}% of possible merges, were either mentioned in
-integration records or obvious.  There were $bo obvious merges and
-$seen paths mentioned in the integration records.
+Integration records mention ${$adj->($o_pc)} $o_pc% of $total
+path(s) that would support the hypothesis.
+
+If it were, then that means ${$adj->($pc)} ${pc}% of possible
+merges, were either mentioned in integration records or obvious.
+There were $bo obvious merges and $seen paths mentioned in the
+integration records.  $dis changes remain ambiguous.
 
 Recording this as a merge is not necessarily the right thing to do; it
 might be better to just record this as a separate change.
@@ -1066,8 +1078,7 @@ sub change_stats {
 	my $show_change_detail = $o->{show_change_detail} = sub {
 		my $path = shift;
 		my $details = shift;
-		my $info = shift;
-		print "On ".($info->{new}?"new ":"")."path $path,\n";
+		print "On path $path,\n";
 		while (my ($change_title, $by_int_path)
 		       = each %$details) {
 			for my $int_path (sort keys %$by_int_path) {
@@ -1336,6 +1347,7 @@ SQL
 		$add_change_branch->($path, $change)
 			unless $curr_paths{$path};
 		my $PcO = $by_path_chg_obj{$path};
+		$show_change_detail->($path, $PcO);
 		my $POc = $by_path_obj_chg{$path};
 		my $parents = $parents{$path}||[];
 		if ( grep { $_->{manual} } @$parents ) {
@@ -1349,15 +1361,12 @@ SQL
 		my $has_other_paths = grep { length && $_ ne $path }
 			keys %$POc;
 
-		my $info = {};
 		if ( !exists $prev_paths{$path} ) {
-			$info->{new} = 1;
 			if ( exists $PcO->{integrate} or
 			     exists $PcO->{delete} or
 			     exists $PcO->{edit}
 			   ) {
 				moan "new path $path\@$change has non-new changes, odd";
-				$info->{invalid} = 1;
 			}
 			if ( !$know_parents and $PcO->{branch} and
 			     $has_other_paths
@@ -1386,7 +1395,6 @@ SQL
 					 });
 			}
 		}
-		$show_change_detail->($path, $PcO, $info);
 		if ( !$know_parents ) {
 			for my $row (@ncp) {
 				$add_parent->($row);
@@ -1849,7 +1857,7 @@ sub index_for_version {
 
 			     $index{$relative} =
 				     [ $row->{md5sum}, $row->{mark},
-				       $row->{blobid} ];
+				       $row->{blobid}, $relative ];
 		     },
 		   });
 	return \%index;
@@ -1862,16 +1870,41 @@ sub index_eq {
 		return 1;
 	}
 	if ( !$idx_a or !$idx_b ) {
+		if ( $VERBOSE > 1 ) {
+			whisper "$idx_a->[3] in A, not B => not equal"
+				if $idx_a;
+			whisper "$idx_b->[3] in B, not A => not equal"
+				if $idx_b;
+		}
 		return 0;
 	}
 	if ( $idx_a->[2] and $idx_b->[2] ) {
+		if ( $VERBOSE > 1 ) {
+			if ($idx_a->[2] ne $idx_b->[2]) {
+				whisper "$idx_a->[3]: ".substr($idx_a->[2],0,12)
+					." in A vs ".substr($idx_b->[2],0,12)
+						." in B";
+			} else {
+				whisper "$idx_a->[3]: blob ID match";
+			}
+		}
 		$idx_a->[2] eq $idx_b->[2];
 	}
 	elsif ( $idx_a->[1] and $idx_b->[1] and
 		$idx_a->[1] == $idx_b->[1] ) {
+		whisper "$idx_a->[3]: marknum match" if $VERBOSE > 1;
 		return 1;
 	}
 	elsif ( $idx_a->[0] and $idx_b->[0] ) {
+		if ( $VERBOSE > 1 ) {
+			if ($idx_a->[0] ne $idx_b->[0]) {
+				whisper "$idx_a->[3]: ".substr($idx_a->[0],0,7)
+					." in A vs ".substr($idx_b->[0],0,7)
+						." in B";
+			} else {
+				whisper "$idx_a->[3]: md5sum match";
+			}
+		}
 		$idx_a->[0] eq $idx_b->[0];
 	}
 	else {
@@ -1981,6 +2014,7 @@ sub parse_export_opts {
 		my @gfi_options;
 		getopt("n=i" => \$export_opts{chunk_size},
 		       "depth=i" => \$export_opts{depth},
+		       "l|long" => \$export_opts{long},
 		      );
 		@_ = @ARGV;
 	}
@@ -2390,7 +2424,7 @@ sub do_find_branches {
 	for my $change ( $export_opts{min} .. $export_opts{max} ) {
 		$dbh->begin_work;
 		change_stats($dbh, $change,
-			     { compact => 1,
+			     { compact => !$export_opts{long},
 			     },
 			    );
 		print "\n";
@@ -2510,13 +2544,11 @@ SQL
 					if $VERBOSE > 1;
 			}
 		}
-		elsif ( @parent_of ) {
-			push @interesting,
-				(grep { !$seen{$_}++ }
-				 @parents);
-			@interesting = sort { $sortfunc->($a, $b) }
-				@interesting;
-		}
+		push @interesting,
+			(grep { !$seen{$_}++ }
+			 @parents);
+		@interesting = sort { $sortfunc->($a, $b) }
+			@interesting;
 
 		$seen{$item}++;
 	}
@@ -2551,6 +2583,11 @@ sub do_merge_base {
 	}
 }
 
+sub do_is_parent {
+	my $dbh = shift;
+	
+}
+
 	# 5. finally, we have rev_blob rows for all of the files
 	#    in this version, so send a tree and/or commit object
 	#    (though it might be easier to use
@@ -2561,6 +2598,8 @@ sub do_merge_base {
 
 sub do_export_commits {
 	my $dbh = shift;
+
+
 }
 
 #=====================================================================
