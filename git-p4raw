@@ -1177,7 +1177,8 @@ SQL
 			$paths{(shift)} ||= undef;
 		}
 		if ( keys %paths ) {
-			my $re = join("|",map{"\Q$_\E"} keys %paths);
+			my $re = join("|",sort { length($b)<=>length($a) }
+				      map{"\Q$_\E"} keys %paths);
 			$path_re = qr{$re};
 		}
 		else {
@@ -1218,20 +1219,27 @@ SQL
 		$o->{revcxs}->($row, $path) if $o->{revcxs};
 	};
 
-	# paranoia - the above was a quick sweep only.  remove the paths
-	# that shadow each other.
-	my @gonners = grep { m{^($path_re)/} && !$paths{$_} }
-		keys %paths;
+	# remove the paths that shadow each other.
+	my @gonners = grep { m{^($path_re)/} } keys %paths;
+	$DB::single = 1;
 	if ( @gonners ) {
 		for my $gonner ( @gonners ) {
-			if ( my @x = grep m{^\Q$_\E/}, keys %prev_paths,
-			     keys %curr_paths ) {
-				# this is a bug - the $add_path closure
-				# shouldn't let these through
-				die "$gonner shadows branches: @x";
+			if ( $prev_paths{$gonner} ) {
+				# this new change would appear to shadow others.
+				# so, nuke it.
+				if ( $gonner =~ m{^($path_re)/} ) {
+					my $culprit = $1;
+					moan "$culprit shadows branches: "
+						.join(" ", grep m{^\Q$culprit\E/},
+						      @gonners);
+					delete $paths{$1};
+					$add_path->();
+				}
 			}
-			delete $paths{@gonners};
-			moan "ignoring changes on path $gonner\@$change";
+			else {
+				moan "ignoring changes on path $gonner\@$change";
+				delete $paths{$gonner};
+			}
 		}
 		$add_path->();
 	}
@@ -1244,9 +1252,11 @@ SQL
 		#whisper "row: $row->{depotpath} $row->{change_title} $row->{int_obj}";
 	  }
 		my ($path) = ($row->{depotpath} =~ m{^($path_re)/})
-			or die "got confused.  depotpath = "
-				.("$row->{depotpath}, looking "
-				  ."for $path_re");
+			or do {
+				moan "$row->{depotpath} will NOT be imported";
+				next;
+			};
+
 		my $op = "";
 		if ( $row->{int_obj} &&
 		     $row->{int_obj} =~ m{^($path_re)/} ) {
