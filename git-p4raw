@@ -731,7 +731,7 @@ sub do_describe {
 			}
 			print "action: add $row->{parent_branchpath}\@"
 				.("$row->{parent_change} as a parent of"
-				  ." $row->{branchpath}"
+				  ." $row->{branchpath}\@$change"
 				  .($bad ? " (BAD MERGE)" : "")
 				  ."\n");
 		};
