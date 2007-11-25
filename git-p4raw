@@ -859,6 +859,7 @@ sub derive_extra_parents {
 		my $right = index_for_version($dbh, $source_path, $o_change);
 		$none_unseen = 1;
 		my $count = 0;
+		my $moan_count;
 		for my $mb ( @mb ) {
 			my $base = index_for_version($dbh, @$mb);
 			my @changed = grep {
@@ -869,32 +870,38 @@ sub derive_extra_parents {
 				.("between $mb->[0]\@$mb->[1] and "
 				  ."$source_path\@$o_change\n");
 
+			my $bad;
 			for my $relpath ( @changed ) {
 				if ( !exists $integrated{$relpath} ) {
+					$bad++;
 					print("path $relpath ",
 					      index_diff
 					      ($base->{$relpath},
 					       $right->{$relpath}),
 					      " in $source_path but not in ",
-					      $path);
+					      $path)
+						unless ++$moan_count > 10;
 					my $hmm;
 					$DB::single = 1 if $change == 77;
 					if ( my $x = $root_changes ) {
 						if ( my $i = $x->{integrate} ) {
 							for my $rcx ( @{$i->{revcxs}} ) {
 								if ( $rcx->{depotpath} eq "$path/$relpath" ) {
-									print " but unspec. integration found, so OK";
+									print " but unspec. integration found, so OK" unless $moan_count > 10;
 									$hmm = 1;
 								}
 							}
 						}
 					}
 					$none_unseen = 0 unless $hmm;
-					print "\n";
+					print "\n" unless $moan_count > 10;
 				}
 				else {
 					$count++;
 				}
+			}
+			if ( $moan_count > 10 ) {
+				print "(total of $bad files not listed)\n"
 			}
 		}
 		if ( $none_unseen ) {
