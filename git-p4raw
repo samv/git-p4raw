@@ -803,11 +803,6 @@ sub derive_extra_parents {
 	my @extra;
 	push @extra, evil => 1 if $has_changes;
 
-	$callback->({ branchpath => $path,
-		      parent_branchpath => $path,
-		      parent_change => $prev->{$path},
-		      manual => 0 });
-
 	# warn for octopus and evil merges
 	if ( keys %$POc > 1 ) {
 		print( ($has_changes ? "Shoggoth" : "Octopus")
@@ -821,9 +816,17 @@ sub derive_extra_parents {
 		print "This is an EVIL merge\n";
 	}
 
+	my $manual;
+	my @parents =
+		{ branchpath => $path,
+		  parent_branchpath => $path,
+		  parent_change => $prev->{$path},
+		  manual => 0 };
+
 	# add all parents
 	while ( my ($source_path, $chg_info) = each %$POc ) {
 
+		my @extra_per_src;
 		my ($all_headrev, $none_unseen, $o_change );
 		$o_change = max map { $_->{int_subj_max_change}||-1 }
 			map { @$_ } map { values %$_ }
@@ -859,18 +862,26 @@ sub derive_extra_parents {
 		my $right = index_for_version($dbh, $source_path, $o_change);
 		$none_unseen = 1;
 		my $count = 0;
-		my $moan_count;
+		my $moan_count = 0;
+		my $likeliness;
+		my %unseen;
+		my %obvious;
 		for my $mb ( @mb ) {
 			my $base = index_for_version($dbh, @$mb);
+			my $obvious = 0;
 			my @changed = grep {
 				!(index_eq($right->{$_}, $base->{$_})
-				  or index_eq($right->{$_}, $left->{$_}))
+				  or (index_eq($right->{$_}, $left->{$_})
+				      && do {
+					      $obvious{$_}++;
+					      ++$obvious;
+				      }))
 			} keys %{{ %$right, %$base }};
 			print "there were ".@changed." path(s) changed "
 				.("between $mb->[0]\@$mb->[1] and "
 				  ."$source_path\@$o_change\n");
 
-			my $bad;
+			my $bad = 0;
 			for my $relpath ( @changed ) {
 				if ( !exists $integrated{$relpath} ) {
 					$bad++;
@@ -893,7 +904,10 @@ sub derive_extra_parents {
 							}
 						}
 					}
-					$none_unseen = 0 unless $hmm;
+					unless ($hmm) {
+						$none_unseen = 0;
+						$unseen{$relpath}++;
+					}
 					print "\n" unless $moan_count > 10;
 				}
 				else {
@@ -903,18 +917,76 @@ sub derive_extra_parents {
 			if ( $moan_count > 10 ) {
 				print "(total of $bad files not listed)\n"
 			}
+			if ( @changed ) {
+				$likeliness += ($obvious + @changed - $bad)
+					/ (@changed + $obvious);
+			}
+			else {
+				$likeliness++;
+			}
 		}
 		if ( $none_unseen ) {
 			print "Confirmed $count differences all integrated - it's a merge!\n";
 		}
+		else {
+			my $pc = sprintf "%d", (($likeliness/@mb)*100);
+			my $adj = ($pc > 95 ? "an overwhelming" :
+				   $pc > 80 ? "a massive" :
+				   $pc > 50 ? "about" :
+				   $pc > 20 ? "only" :
+				   $pc > 5  ? "a meagre " : "a pathetic");
+			my $seen = keys %integrated;
+			my $unseen = keys %unseen;
+			my $bo = keys %obvious;
+			print <<THIS;
 
-		$callback->({ branchpath => $path,
-			      parent_branchpath => $source_path,
-			      parent_change => $o_change,
-			      all_headrev => $all_headrev,
-			      none_unseen => $none_unseen,
-			      @extra,
-			      manual => 0 });
+If this change was a merge, it seemed to miss $unseen path(s).
+
+That means $adj ${pc}% of possible merges, were either mentioned in
+integration records or obvious.  There were $bo obvious merges and
+$seen paths mentioned in the integration records.
+
+Recording this as a merge is not necessarily the right thing to do; it
+might be better to just record this as a separate change.
+Alternatively you might be seeing a complicated merge unfold over
+several commits, which is usually entirely disinteresting and should
+be grafted away.
+
+If it looks like the intent of this change is to merge ALL changes
+from $source_path\@$o_change into $path,
+then say "Yes".  Otherwise, say "No".  No information will be lost
+either way; but getting this wrong will affect later merge-base
+calculations, potentially making it harder to figure out what later
+merges are.
+THIS
+			my $func = ($pc > 75 ? \&prompt_Yn : \&prompt_yN);
+			unless ( $func->("Mark as a parent?") ) {
+				next;
+			}
+			$manual = 1;
+			push @extra_per_src, manual => 1;
+		}
+
+		push @parents,
+			{ branchpath => $path,
+			  parent_branchpath => $source_path,
+			  parent_change => $o_change,
+			  all_headrev => $all_headrev,
+			  none_unseen => $none_unseen,
+			  manual => 0,
+			  @extra, @extra_per_src };
+	}
+	for my $p ( @parents ) {
+		$callback->( ($manual and !$p->{manual})
+			     ? {%$p} : $p );
+	}
+	if ( $manual ) {
+		for my $p ( @parents ) {
+			if ( ! $p->{manual} ) {
+				$p->{manual} = 1;
+				$callback->($p);
+			}
+		}
 	}
 }
 
@@ -2363,8 +2435,8 @@ where
 	change <= ? and
 	(manual or (not manual and
 		not exists (select true from change_parents c2
-			where c2.change = c.change and c2.manual))) and
-	(c.none_unseen is null or c.none_unseen = true)
+			where c2.change = c.change and c2.manual) and
+		(c.none_unseen is null or c.none_unseen = true)))
 SQL
 	$sth->execute($max_change);
 	my @cp;
