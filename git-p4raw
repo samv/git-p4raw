@@ -918,6 +918,29 @@ sub derive_extra_parents {
 	}
 }
 
+sub do_lose_branches {
+	my $dbh = shift;
+
+	my %export_opts = parse_export_opts($dbh, "lose_branches", @_);
+
+	say "forgetting branches for $export_opts{chunk_size} changes";
+	$dbh->begin_work;
+	for my $sql ( <<SQL, <<SQL ) {
+delete from
+	change_parents
+where
+	change between ? and ?
+SQL
+delete from
+	change_branches
+where
+	change between ? and ?
+SQL
+		$dbh->do($sql, undef, $export_opts{min}, $export_opts{max});
+	}
+	$dbh->commit;
+}
+
 use POSIX qw(strftime);
 
 sub change_stats {
@@ -1473,12 +1496,21 @@ SQL
 
 sub max_change {
 	my $dbh = shift;
-	my ($change) = map { @$_ } @{ $dbh->selectall_arrayref(<<SQL) };
+	my $o = shift;
+	my $sql = <<SQL;
 select
 	max(change)
 from
 	change
 SQL
+	if ( $o and $o->{lose_branches} ) {
+		$sql .= <<SQL;
+	join change_branches
+		using (change)
+SQL
+	}
+	my ($change) = map { @$_ } @{ $dbh->selectall_arrayref($sql) };
+
 	return $change;
 }
 
@@ -1833,6 +1865,12 @@ having
 	count(cb.branchpath)=0
 SQL
 	}
+	elsif ( $o->{lose_branches} ) {
+		$joins = <<SQL;
+	join change_branches cb
+		using (change)
+SQL
+	}
 
 	my $sql = <<SQL;
 select
@@ -1889,7 +1927,7 @@ sub parse_export_opts {
 			+ $export_opts{chunk_size} - 1;
 	}
 	if ( !$export_opts{max} ) {
-		$export_opts{max} = max_change($dbh);
+		$export_opts{max} = max_change($dbh, { $type => 1 });
 	}
 	if ( $export_opts{min} and $export_opts{max} ) {
 		$export_opts{chunk_size} = $export_opts{max}
