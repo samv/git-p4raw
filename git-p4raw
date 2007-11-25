@@ -2381,7 +2381,9 @@ SQL
 	# the merge base is the latest plane across the ancestry DAG
 	# which is mergable from all the starting points.
 	my @start = map { join '@', @$_ } @places;
+	whisper "finding merge base of: @start" if $VERBOSE > 1;
 	my %parent_of = map { $_ => {$_=>1} } @start;
+	my %stale;
 	my %seen = map { $_ => 0 } @start;
 
 	my $sortfunc = sub {
@@ -2391,7 +2393,8 @@ SQL
 	};
 	my @interesting = sort { $sortfunc->($a, $b) } keys %seen;
 	my %bases;
-	while ( my $item = shift @interesting ) {
+	while ( grep { !exists $stale{$_} } @interesting and
+		(my $item = shift @interesting) ) {
 
 		my @parents;
 		unless ( $item eq '@0' ) {
@@ -2407,19 +2410,33 @@ SQL
 		my @parent_of;
 		for my $tip ( @start ) {
 			if ( $parent_of{$tip}{$item} ) {
-				whisper "$item seen by branch $tip" if $VERBOSE > 1;
 				push @parent_of, $tip;
 				for ( @parents ) {
 					$parent_of{$tip}{$_}++;
 				}
 			}
 		}
+		if ( $stale{$item} ) {
+			whisper "$item is stale" if $VERBOSE > 1;
+			for ( @parents ) {
+				$stale{$_}++;
+			}
+		}
 		whisper "seen by branches: @parent_of" if $VERBOSE > 1;
 
 		if ( @parent_of == @start ) {
 			# merge base
-			$bases{$item}++;
-			whisper "making $item a merge base." if $VERBOSE > 1;
+			if ( !$stale{$item} ) {
+				$bases{$item}++;
+				whisper "making $item a merge base." if $VERBOSE > 1;
+				for my $parent ( @parents ) {
+					$stale{$parent}++;
+				}
+			}
+			else {
+				whisper "$item is a stale merge base."
+					if $VERBOSE > 1;
+			}
 		}
 		elsif ( @parent_of ) {
 			push @interesting,
