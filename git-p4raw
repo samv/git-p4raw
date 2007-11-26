@@ -1031,6 +1031,27 @@ SQL
 	$dbh->commit;
 }
 
+sub do_show_branches {
+	my $dbh = shift;
+	my $change = shift || max_change($dbh);
+	if ( $change !~ m{^\d+$} ) {
+		abort "bad change # '$change'";
+	}
+	my $branches = change_branches_iter($dbh, $change, "max");
+	my %branches;
+	while ( my $x = $branches->() ) {
+		$branches{$x->{branchpath}} = $x->{change};
+	}
+	my $length = max map { length $_ } keys %branches;
+	my $num_length = max map { length $_ } values %branches;
+	for my $branch ( sort keys %branches ) {
+		print $branch, (" " x ($length - length($branch)
+				       + $num_length
+				       - length($branches{$branch}) + 1)),
+			"$branches{$branch}\n";
+	}
+}
+
 use POSIX qw(strftime);
 
 sub change_stats {
@@ -2950,6 +2971,11 @@ or more of the items of the list is a descendent of one of the
 returned items, B<and> all of the other items are descended from it.
 
 =back
+
+=item C<git-p4raw show-branches [CHANGE]>
+
+Show the list of branches (if the option is passed, as they were at
+the given change)
 
 =item C<git-p4raw annotate file[revRange]> (TODO)
 
