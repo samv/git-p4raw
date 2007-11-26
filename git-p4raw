@@ -742,29 +742,35 @@ sub do_describe {
 	$dbh->commit;
 }
 
-sub change_branches_max_iter {
+sub change_branches_iter {
 	my $dbh = shift;
 	my $change = shift;
+	my $what = shift;
+	my ($filter, $select);
+	if ( $what eq "eq" ) {
+		$filter = "change = ?";
+		$select = "change";
+	}
+	elsif ( $what eq "max" ) {
+		$filter = "change <= ?";
+		$select = "max(change) as change";
+	}
+	elsif ( $what eq "min" ) {
+		$filter = "change <= ?";
+		$select = "min(change) as change";
+	}
 	my $sth = $dbh->prepare(<<SQL);
 select
 	branchpath,
-	max(change) as change
+	$select
 from
 	change_branches
 where
-	change < ?
+	$filter
 group by
 	branchpath
-union
-select
-	branchpath,
-	change
-from
-	change_branches
-where
-	change = ?
 SQL
-	$sth->execute( ($change) x 2 );
+	$sth->execute( $change );
 	return sub {
 		$sth->fetchrow_hashref;
 	};
@@ -1126,7 +1132,11 @@ SQL
 	$sth->finish;
 
 no_header:
-	my $iter = change_branches_max_iter($dbh, $change);
+	my $iter = change_branches_iter($dbh, $change-1, "max");
+	while ( my $row = $iter->() ) {
+		$prepare_paths->($row);
+	}
+	$iter = change_branches_iter($dbh, $change, "eq");
 	while ( my $row = $iter->() ) {
 		$prepare_paths->($row);
 	}
