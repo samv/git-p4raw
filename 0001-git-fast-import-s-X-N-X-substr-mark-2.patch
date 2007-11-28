@@ -1,0 +1,131 @@
+From: Sam Vilain <sam@vilain.net>
+Date: Wed, 28 Nov 2007 01:02:17 +1300
+Subject: [PATCH] git-fast-import: s/(X+\:\((N)\)X+)/substr($mark[$2],0,length($1))/
+
+Applied Turing Test for Project Submitters: trying to figure out if
+that C code was written by hand or a one-liner written by some
+smartass with a fancy pants compile system and C target.  Bonus
+points: come up with such a compiler.  Extra bonus points: the
+original WAS hand-coded.
+---
+  Based on an irc conversation.
+
+  21:13 < mugwump> spearce: I want to put a commit ID in a commit
+                   message with gfi.  any implementation hints?
+  21:18 < spearce> i'd try to do it as late as possible, e.g. right
+                   before the strbuf_reset around l.2082.
+  21:20 < mugwump> Could make the expansion syntax: d00b1ed00b1ed00b, more X's
+                   gives you more sha1
+  21:21 < mugwump> and do it in-place
+  21:21 < mugwump> has a certain appeal
+  21:22 < spearce> right until a commit message talks about using that
+                   format to do replacement. :-)
+  21:23 < mugwump> heh, true
+
+  ... to be continued ... :)
+
+ fast-import.c |   81 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 files changed, 81 insertions(+), 0 deletions(-)
+
+diff --git a/fast-import.c b/fast-import.c
+index f93d7d6..d7bd95a 100644
+--- a/fast-import.c
++++ b/fast-import.c
+@@ -2012,6 +2012,86 @@ static struct hash_list *cmd_merge(unsigned int *count)
+ 	return list;
+ }
+ 
++/*  s/(X+\:\((N)\)X+)/substr($mark[$2],0,length($1))/ */
++enum marks_expand_state_switch {
++	MESS_PRE_X,
++	MESS_X,
++	MESS_COLON,
++	MESS_NUM,
++	MESS_CLOSE_PAREN
++};
++
++void strbuf_expand_marks(struct strbuf *sb) {
++	char *next = sb->buf;
++	char *M1 = sb->buf;
++	int offset = 0;
++	enum marks_expand_state_switch state = 0;
++	uintmax_t mark = 0;
++	struct object_entry* ob = NULL;
++	static const char hex[] = "0123456789abcdef";
++	int nybble = 0;
++
++	while (offset < sb->len) {
++		next++;
++		switch (state) {
++		case MESS_PRE_X:
++			if (*next == 'X') {
++				M1 = next;
++				state = MESS_X;
++			}
++			break;
++		case MESS_X:
++			switch (*next) {
++			default:
++				state = MESS_PRE_X;
++				break;
++			case ':':
++				state = MESS_COLON;
++			case 'X':
++				break;
++			}	
++			break;
++		case MESS_COLON:
++			if (*next == '(') {
++				state = MESS_NUM;
++				mark = 0;
++			}
++			else
++				state = MESS_PRE_X;
++			break;
++		case MESS_NUM:
++			if ( (*next <= '9') && (*next >= '0') ) {
++				mark = mark * 10;
++				mark += (*next) - '0';
++				state = MESS_NUM;
++			}
++			else if (*next == ')') {
++				state = (mark ? MESS_CLOSE_PAREN : MESS_PRE_X);
++				nybble = 0;
++			}
++			else {
++				state = MESS_PRE_X;
++			}
++			break;
++		case MESS_CLOSE_PAREN:
++			if (*next != 'X') {
++				state = MESS_PRE_X;
++				break;
++			}
++			if (!nybble) {
++				ob = find_mark(mark);
++			}
++			while (M1 <= next) {
++				unsigned char b = ob->sha1[nybble>>1];
++				*M1 = hex[ (nybble&1) ? (b&0xf) : (b>>4)  ];
++				M1++;
++				nybble++;
++			}
++		}
++		offset++;
++	}
++}
++
+ static void cmd_new_commit(void)
+ {
+ 	static struct strbuf msg = STRBUF_INIT;
+@@ -2092,6 +2172,7 @@ static void cmd_new_commit(void)
+ 		"committer %s\n"
+ 		"\n",
+ 		author ? author : committer, committer);
++	strbuf_expand_marks(&msg);
+ 	strbuf_addbuf(&new_data, &msg);
+ 	free(author);
+ 	free(committer);
+-- 
+1.5.3.2.3.g2f2dcc-dirty
+
