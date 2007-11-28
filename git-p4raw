@@ -1011,7 +1011,7 @@ THIS
 sub do_lose_branches {
 	my $dbh = shift;
 
-	my %export_opts = parse_export_opts($dbh, "lose_branches", @_);
+	my %export_opts = parse_export_opts($dbh, "extant_branches", @_);
 
 	say "forgetting branches for $export_opts{chunk_size} changes";
 	$dbh->begin_work;
@@ -1624,7 +1624,7 @@ select
 from
 	change
 SQL
-	if ( $o and $o->{lose_branches} ) {
+	if ( $o and $o->{extant_branches} ) {
 		$sql .= <<SQL;
 	join change_branches
 		using (change)
@@ -2011,7 +2011,7 @@ having
 	count(cb.branchpath)=0
 SQL
 	}
-	elsif ( $o->{lose_branches} ) {
+	elsif ( $o->{extant_branches} ) {
 		$joins = <<SQL;
 	join change_branches cb
 		using (change)
