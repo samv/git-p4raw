@@ -188,5 +188,8 @@ create table change_parents (
 	OR	((parent_change is null and parent_branchpath is null)
 		 AND
 		 (ref is not null))
-	)
+	),
+
+	-- zomg no .. he's not going to put JSON in there is he?
+	json_info TEXT
 );

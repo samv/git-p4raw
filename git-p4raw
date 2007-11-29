@@ -14,6 +14,10 @@ use File::Path qw(rmtree);
 use Fatal qw(:void open);
 use Digest::SHA1;
 use Digest::MD5 qw(md5_hex);
+use Text::Wrap;
+$Text::Wrap::columns = 72;
+use JSON;
+use YAML;
 BEGIN { eval "use Term::ProgressBar" };
 
 use vars qw($SHARE $SCRIPT_MODE);
@@ -804,8 +808,8 @@ sub row_iter {
 	my $sth;
 	sub {
 		if ( !$sth ) {
-			$sth = $dbh->prepare($sql);
-			$sth->execute(@args);
+			$sth = $dbh->prepare($sql) or die $dbh->errstr;
+			$sth->execute(@args) or die $sth->errstr;
 		}
 		$sth->fetchrow_hashref or do {
 			$sth->finish;
@@ -849,6 +853,8 @@ sub derive_extra_parents {
 		  parent_change => $prev->{$path},
 		  manual => 0 };
 
+	my @ignored;
+
 	# add all parents
 	while ( my ($source_path, $chg_info) = each %$POc ) {
 
@@ -868,12 +874,14 @@ sub derive_extra_parents {
 		# by this change.
 		my %integrated;
 		my $integed_c;
+		my %revcx_by_relpath;
 		while ( my ($type, $c_d) = each %{$POc->{$source_path}} ) {
 			for my $revcx ( @{ $c_d->{revcxs} } ) {
 				my $relpath = $revcx->{int_obj};
 				$relpath =~ s{^\Q$source_path\E/}{} &&
 					($integrated{$relpath}++);
 				$integed_c++;
+				$revcx_by_relpath{$relpath}=$revcx;
 			}
 		}
 		# now here's the fancy-pants stuff.  Find the merge base...
@@ -892,18 +900,45 @@ sub derive_extra_parents {
 		my $count = 0;
 		my $moan_count = 0;
 		my %unseen;
+		my (%curious, %omitted);
 		my %obvious;
+
 		for my $mb ( @mb ) {
+
+			# ok, so, it's actually *here* that we need to
+			# pull down the integed rows.  This is
+			# somewhat approximate; the assumption is made
+			# that any changes that appear on a branch are
+			# always on the ancestry tree back to the
+			# merge base.  If you delete branches,
+			# re-branch them from a point prior to that,
+			# and then merge them this precondition may
+			# break.  I think.
+			my %old_integed;
+			my $row_iter = row_iter
+				($dbh, $path, $change, $source_path,
+				 $o_change, $mb->[1], <<SQL);
+select
+	*
+from
+	integed
+	join int_type using (int_type)
+where
+	(subject like (?||'/%') and change < ?)
+and	(object like (?||'/%') and change < ?)
+and	change > ?
+SQL
+
 			my $base = index_for_version($dbh, @$mb);
 			my @changed = grep {
-				!index_eq($right->{$_}, $base->{$_})
-					and !( (index_eq($right->{$_}, $left->{$_})
-						#||
-						#index_eq($left->{$_}, $base->{$_}))
-					       )
-					       && do {
-						       $obvious{$_}++;
-					       })
+				 (!index_eq($right->{$_}, $base->{$_}) and
+				  ((($right->{$_}&&$right->{$_}[4])||$change) > $mb->[1]) and
+				  !( (index_eq($right->{$_}, $left->{$_}))
+				    && do {
+					    $obvious{$_}++;
+					    $curious{$_}=0;
+					    $omitted{$_}=0;
+				    }))
 				} keys %{{ %$right, %$base }};
 			print "there were ".@changed." path(s) changed "
 				.("between $mb->[0]\@$mb->[1] and "
@@ -911,20 +946,24 @@ sub derive_extra_parents {
 
 			my $bad = 0;
 			for my $relpath ( @changed ) {
-				if ( !exists $integrated{$relpath} ) {
+				if ( !exists $integrated{$relpath} and
+				     !$obvious{$relpath}
+				   ) {
 					$bad++;
 					print("path $relpath ",
 					      index_diff
 					      ($base->{$relpath},
 					       $right->{$relpath}),
-					      " in $source_path but ",
+					      " in $source_path".
+					      ($right?"\@$right->{$relpath}[4]":"")
+					      ." but ",
 					      index_diff
 					      ($base->{$relpath},
 					       $left->{$relpath}),
-					      " in ", $path)
+					      " in ", $path,
+					      ($left?" since change $left->{$relpath}[4]":""))
 						unless ++$moan_count > 10;
 					my $hmm;
-					$DB::single = 1 if $change == 77;
 					if ( my $x = $root_changes ) {
 						if ( my $i = $x->{integrate} ) {
 							for my $rcx ( @{$i->{revcxs}} ) {
@@ -935,11 +974,43 @@ sub derive_extra_parents {
 							}
 						}
 					}
-					unless ($hmm) {
-						$none_unseen = 0;
-						$unseen{$relpath}++;
-					}
 					print "\n" unless $moan_count > 10;
+					unless ($hmm) {
+						# ok, so if we get here then call that row_iter
+						if ( !keys %old_integed ) {
+							print "Just checking for integs between changes "
+								.(($mb->[1]+1)." and ".(max($change, $o_change)-1)
+								  ." between $source_path and $path\n");
+							while ( my $row = $row_iter->() ) {
+								(my $relpath2 = $row->{subject}) =~ s{$path/}{};
+								$old_integed{$relpath2} = $row;
+							}
+							$old_integed{\0}++;
+						}
+						if ( my $oi = $old_integed{$relpath} ) {
+							print wrap("", "", "BUT HOLD IT!  In change $oi->{change}, there was an $source_path $oi->{title} $path ($oi->{description}).  That'll do us.\n")
+								unless $moan_count > 10;
+						}
+						else {
+							$none_unseen = 0;
+							$unseen{$relpath}++;
+							if ( index_eq($base->{$relpath},
+								      $left->{$relpath})) {
+								$omitted{$relpath}++
+									unless exists $omitted{$relpath};
+							}
+							else {
+								$curious{$relpath}++
+									unless exists $curious{$relpath};
+							}
+							if ( $VERBOSE > 1 ) {
+								whisper "index info:",
+									Dump({ left => $left->{$relpath},
+									       right => $right->{$relpath},
+									       base => $base->{$relpath} });
+							}
+						}
+					}
 				}
 				else {
 					$count++;
@@ -958,7 +1029,14 @@ sub derive_extra_parents {
 			my $total = $seen + $unseen;
 			my $bo = keys %obvious;
 			my $s_b_o = keys %{{ %obvious, %integrated }};
-			my $dis = $total - $s_b_o;
+			delete @omitted{grep {!$omitted{$_}} keys %omitted};
+			delete @curious{grep {!$curious{$_}} keys %curious};
+			my $dis = keys %{{ %omitted, %curious }};
+			my @bad = sort keys %{{ %omitted, %curious }};
+			if ( @bad > 10 ) {
+				$#bad = 9;
+				push @bad, "...";
+			}
 			my $pc = sprintf "%d", (($s_b_o)/($s_b_o+$unseen))*100;
 			my $adj = sub {
 				\($_[0] > 95 ? "an overwhelming" :
@@ -968,11 +1046,9 @@ sub derive_extra_parents {
 				 $_[0] > 5  ? "a meagre" : "a pathetic");
 			};
 			my $o_pc = sprintf "%d", $seen/$total * 100;
-			use Text::Wrap;
-			$Text::Wrap::columns = 72;
 			whisper "seen: $seen, unseen: $unseen, bo: $bo, pc:$pc opc:$o_pc, integed: $integed_c";
 			print map { my $x = $_; $x =~ s{\n}{ }g;
-				    wrap("","",$x)."\n\n" } split /\n\n/, <<THIS;
+				    wrap("","",$x)."\n\n" } split /\n\n/, <<THIS unless ($pc < 2 or $pc > 98);
 
 Was this change was a merge in the git sense?
 
@@ -982,7 +1058,7 @@ path(s) that would support the hypothesis.
 If it were, then that means ${$adj->($pc)} ${pc}% of possible
 merges, were either mentioned in integration records or obvious.
 There were $bo obvious merges and $seen paths mentioned in the
-integration records.  $dis changes remain ambiguous.
+integration records.  $dis changes remain ambiguous (@bad).
 
 Recording this as a merge is not necessarily the right thing to do; it
 might be better to just record this as a separate change.
@@ -998,11 +1074,28 @@ calculations, potentially making it harder to figure out what later
 merges are.
 THIS
 			my $func = ($pc > 75 ? \&prompt_Yn : \&prompt_yN);
+			# dirty hack - less than 1 in 50 => no
+			if ( $pc < 2) {
+				$func = sub { 0 };
+			}
+			elsif ( $pc > 98 ) {
+				$func = sub { 1 };
+			}
 			unless ( $func->("Mark as a parent?") ) {
+				push @ignored,
+					$source_path => \%revcx_by_relpath;
 				next;
 			}
 			$manual = 1;
-			push @extra_per_src, manual => 1;
+			push @extra_per_src,
+				(manual => 1,
+				 (keys %unseen
+				  ? (json_info => objToJson
+				     ({omitted=>[grep { $omitted{$_} }
+						 keys %omitted],
+				       curious=>[grep { $curious{$_} }
+						 keys %curious ]}))
+				  : ()));
 		}
 
 		push @parents,
@@ -1015,6 +1108,9 @@ THIS
 			  @extra, @extra_per_src };
 	}
 	for my $p ( @parents ) {
+		if ( @ignored and !$p->{json_info} ) {
+			$p->{json_info}=objToJson{integrated=>{@ignored}};
+		}
 		$callback->( ($manual and !$p->{manual})
 			     ? {%$p} : $p );
 	}
@@ -1272,7 +1368,6 @@ SQL
 
 	# remove the paths that shadow each other.
 	my @gonners = grep { m{^($path_re)/} } keys %paths;
-	$DB::single = 1;
 	if ( @gonners ) {
 		for my $gonner ( @gonners ) {
 			if ( $prev_paths{$gonner} ) {
@@ -1361,12 +1456,20 @@ SQL
 			  ? " (tenuous)" : ""),
 			 ($row->{evil} ? " (EVIL)" : ""),
 			 "\n");
+		if ( $row->{json_info} ) {
+			print "Mismatch:".
+				Dump(jsonToObj($row->{json_info}));
+		}
 	};
 
 	my $add_parent_sth;
-	my $add_parent = $o->{add_parent} ||= sub {
+	my $add_parent = sub {
 		my $row = shift;
 		$show_parent->($row);
+		if ( $o->{add_parent} ) {
+			$o->{add_parent}->($row);
+			return;
+		}
 
 		my @cols = keys %$row;
 		$add_parent_sth = $dbh->prepare(<<SQL);
@@ -1918,7 +2021,7 @@ sub index_for_version {
 
 			     $index{$relative} =
 				     [ $row->{md5sum}, $row->{mark},
-				       $row->{blobid}, $relative ];
+				       $row->{blobid}, $relative, $row->{last_change} ];
 		     },
 		   });
 	return \%index;
@@ -1969,6 +2072,7 @@ sub index_eq {
 		$idx_a->[0] eq $idx_b->[0];
 	}
 	else {
+		no warnings 'uninitialized';
 		moan "Can't compare index entries; (@$idx_a) vs (@$idx_b)";
 		0;
 	}
@@ -2548,10 +2652,11 @@ SQL
 	# the merge base is the latest plane across the ancestry DAG
 	# which is mergable from all the starting points.
 	my @start = map { join '@', @$_ } @places;
+	my %start = map { $_ => 1 } @start;
 	whisper "finding merge base of: @start" if $VERBOSE > 1;
 	my %parent_of = map { $_ => {$_=>1} } @start;
 	my %stale;
-	my %seen = map { $_ => 0 } @start;
+	my %seen = map { $_ => 1 } @start;
 
 	my $sortfunc = sub {
 		my ($c_a) = ($_[0] =~ m{@(\d+)$});
