@@ -955,13 +955,13 @@ SQL
 					      ($base->{$relpath},
 					       $right->{$relpath}),
 					      " in $source_path".
-					      ($right?"\@$right->{$relpath}[4]":"")
+					      ($right->{$relpath}?"\@$right->{$relpath}[4]":"")
 					      ." but ",
 					      index_diff
 					      ($base->{$relpath},
 					       $left->{$relpath}),
 					      " in ", $path,
-					      ($left?" since change $left->{$relpath}[4]":""))
+					      ($left->{$relpath}?" since change $left->{$relpath}[4]":""))
 						unless ++$moan_count > 10;
 					my $hmm;
 					if ( my $x = $root_changes ) {
@@ -1048,7 +1048,7 @@ SQL
 			my $o_pc = sprintf "%d", $seen/$total * 100;
 			whisper "seen: $seen, unseen: $unseen, bo: $bo, pc:$pc opc:$o_pc, integed: $integed_c";
 			print map { my $x = $_; $x =~ s{\n}{ }g;
-				    wrap("","",$x)."\n\n" } split /\n\n/, <<THIS unless ($pc < 2 or $pc > 98);
+				    wrap("","",$x)."\n\n" } split /\n\n/, <<THIS unless ($o_pc < 15 or $o_pc > 90);
 
 Was this change was a merge in the git sense?
 
@@ -1073,12 +1073,12 @@ either way; but getting this wrong will affect later merge-base
 calculations, potentially making it harder to figure out what later
 merges are.
 THIS
-			my $func = ($pc > 75 ? \&prompt_Yn : \&prompt_yN);
-			# dirty hack - less than 1 in 50 => no
-			if ( $pc < 2) {
+			my $func = ($o_pc > 75 ? \&prompt_Yn : \&prompt_yN);
+			# dirty hack - less than 1 in 25 => no
+			if ( $o_pc < 15) {
 				$func = sub { 0 };
 			}
-			elsif ( $pc > 98 ) {
+			elsif ( $o_pc > 90 ) {
 				$func = sub { 1 };
 			}
 			unless ( $func->("Mark as a parent?") ) {
