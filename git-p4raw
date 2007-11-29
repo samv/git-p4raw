@@ -797,6 +797,23 @@ sub derive_branch_src {
 	}
 }
 
+sub row_iter {
+	my $dbh = shift;
+	my $sql = pop;
+	my @args = @_;
+	my $sth;
+	sub {
+		if ( !$sth ) {
+			$sth = $dbh->prepare($sql);
+			$sth->execute(@args);
+		}
+		$sth->fetchrow_hashref or do {
+			$sth->finish;
+			return ();
+		};
+	}
+}
+
 sub derive_extra_parents {
 	my $dbh = shift;
 	my $path = shift;
