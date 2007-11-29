@@ -746,7 +746,7 @@ sub change_branches_iter {
 	my $dbh = shift;
 	my $change = shift;
 	my $what = shift;
-	my ($filter, $select);
+	my ($filter, $select, $group);
 	if ( $what eq "eq" ) {
 		$filter = "change = ?";
 		$select = "change";
@@ -754,12 +754,14 @@ sub change_branches_iter {
 	elsif ( $what eq "max" ) {
 		$filter = "change <= ?";
 		$select = "max(change) as change";
+		$group = 1;
 	}
 	elsif ( $what eq "min" ) {
 		$filter = "change <= ?";
 		$select = "min(change) as change";
+		$group = 1;
 	}
-	my $sth = $dbh->prepare(<<SQL);
+	my $sth = $dbh->prepare(<<SQL.($group?<<SQL:""));
 select
 	branchpath,
 	$select
@@ -767,6 +769,7 @@ from
 	change_branches
 where
 	$filter
+SQL
 group by
 	branchpath
 SQL
