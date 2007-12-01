@@ -806,15 +806,36 @@ sub row_iter {
 	my $sql = pop;
 	my @args = @_;
 	my $sth;
+	my @putback;
+	my $deplete;
 	sub {
+		if ( @_ ) {
+			push @putback, @_;
+			return ();
+		}
+		elsif ( @putback ) {
+			return pop @putback;
+		}
+		if ( !$sth and !$sql ) {
+			return undef;
+		}
 		if ( !$sth ) {
-			$sth = $dbh->prepare($sql) or die $dbh->errstr;
+			if ( ref $sql ) {
+				$sth = $sql;
+			}
+			else {
+				$sth = $dbh->prepare($sql)
+					or die $dbh->errstr;
+			}
 			$sth->execute(@args) or die $sth->errstr;
 		}
-		$sth->fetchrow_hashref or do {
+		my $rv = $sth->fetchrow_hashref;
+		if ( !$rv ) {
 			$sth->finish;
-			return ();
+			undef($sth);
+			undef($sql);
 		};
+		$rv;
 	}
 }
 
