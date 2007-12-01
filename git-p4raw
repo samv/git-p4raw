@@ -1479,8 +1479,8 @@ SQL
 			 ($row->{evil} ? " (EVIL)" : ""),
 			 "\n");
 		if ( $row->{json_info} ) {
-			print "Mismatch:".
-				Dump(jsonToObj($row->{json_info}));
+			print map { $_, "\n" }
+				show_juice($row, jsonToObj($row->{json_info}));
 		}
 	};
 
@@ -2163,6 +2163,19 @@ SQL
 		using (change)
 SQL
 	}
+	elsif ( $o->{commits} ) {
+		$joins = <<SQL;
+	join change_branches cb
+		on (cb.change = c.change)
+	left join change_marks cm
+		on (cb.branchpath = cm.branchpath and
+			cb.change = cm.change)
+SQL
+		$having = <<SQL;
+having
+	count(cm.mark)=0
+SQL
+	}
 
 	my $sql = <<SQL;
 select
@@ -2308,13 +2321,65 @@ SQL
 sub gfi_send_blob {
 	my $dbh = shift;
 	my $buf = shift;
-	my $l = length($$buf);
 	my $mark = gfi_get_mark($dbh, "blob");
 	print GFI "blob\n";
 	print GFI "mark :", $mark, "\n";
+	gfi_data($buf);
+	$mark;
+}
+
+sub gfi_data {
+	my $buf = shift;
+	my $l = length($$buf);
 	print GFI "data $l\n";
 	print GFI $$buf, "\n";
-	$mark;
+}
+
+sub gfi_start_commit {
+	my $dbh = shift;
+	my $mark = gfi_get_mark($dbh, "commit");
+	my $ref = shift;
+	my $author = shift;
+	my $committer = shift;
+	print GFI "commit ", $ref, "\n";
+	print GFI "mark :", $mark, "\n";
+	print GFI "author ", $author->[0], " <", $author->[1], "> ",
+		$author->[2], "\n" if $author;
+	print GFI "committer ", $committer->[0], " <", $committer->[1], "> ",
+		$committer->[2], "\n";
+	return $mark;
+}
+
+sub gfi_from {
+	my $parent = shift;
+	if ( defined $parent ) {
+		print GFI "from ", $parent, "\n";
+	}
+	else {
+		print GFI "deleteall\n";
+	}
+}
+
+sub gfi_merge {
+	while ( my $parent = shift ) {
+		print GFI "merge ", $parent, "\n";
+	}
+}
+
+sub gfi_filedelete {
+	my $relname = shift;
+	print GFI "D ", $relname, "\n";
+}
+
+sub gfi_filemodify {
+	my $mode = shift;
+	my $ref = shift;
+	my $relname = shift;
+	print GFI "M ", sprintf("%o", $mode), " ", $ref, " ", $relname, "\n";
+}
+
+sub gfi_finish_commit {
+	print GFI "\n";
 }
 
 sub gfi_checkpoint {
@@ -2784,16 +2849,341 @@ sub do_is_parent {
 	#    where it is not redundant (which is a difficult criterion
 	#    to nail down for sure!)
 
+sub export_commit_chunk {
+	my $dbh = shift;
+	my $o = shift;
+
+	$dbh->begin_work();
+
+	# first, get a plan of branches to export
+	my $commit_dag = row_iter($dbh, $o->{min}, $o->{max}, <<SQL);
+select
+	cb.branchpath,
+	cb.change,
+	cp.parent_branchpath,
+	cp.parent_change,
+	cm.mark,
+	m.commitid,
+	cp.ref,
+	cp.manual,
+	cp.json_info
+from
+	change_branches cb
+	left join change_parents cp
+		on ( (cb.branchpath = cp.branchpath and
+			cb.change = cp.change) and
+			(cp.manual or (not cp.manual and
+				not exists (select true from change_parents cp2
+					where cp2.change = cp.change
+						and cp2.manual) and
+			(cp.none_unseen is null or cp.none_unseen = true)))
+		)
+	left join change_marks cm
+		on (cp.parent_branchpath = cm.branchpath and
+			cp.parent_change = cm.change)
+	left join marks m
+		using (mark)
+where
+	cb.change between ? and ?
+order by
+	cb.change,
+	cb.branchpath,
+	(cp.parent_branchpath = cb.branchpath) desc
+SQL
+
+	# a big query yes, but remember this is git-*fast*-import ;)
+	my $files = row_iter($dbh, $o->{min}, $o->{max}, <<SQL);
+select
+	cb.change,
+	cb.branchpath,
+	substr(rev.depotpath, length(cb.branchpath)) as relpath,
+	ct.title as change_type,
+	file_type,
+	mark,
+	blobid
+from
+	change_branches cb
+	join rev on (cb.change = rev.change
+		and rev.depotpath like (cb.branchpath||'/%') )
+	join change_type ct on (rev_change_type = change_type)
+	left join rev_marks using (depotpath,revision)
+	left join marks using (mark)
+where
+	cb.change between ? and ?
+order by
+	cb.change,
+	cb.branchpath
+SQL
+
+	# remember which branches we have reset
+	my %branches;
+	my %cb_marks;
+	my $to_ref = sub {
+		my $x = shift;
+		my $ref = $x->{ref} || $x->{commitid};
+		if ( !$ref ) {
+			my ($pb, $pc) =
+				($x->{parent_branchpath},
+				 $x->{parent_change});
+			if ( $pb ) {
+				my $mark = $x->{mark} || $cb_marks{$pb}{$pc};
+				$ref = ":$mark";
+			}
+			else {
+				$ref = undef;
+			}
+		}
+		whisper "ref of parent: ".$ref
+			if defined $ref;
+		$ref;
+	};
+
+	my $desc_i = row_iter($dbh, $o->{min}, $o->{max}, <<SQL);
+select
+	change,
+	realname,
+	email,
+	change_time,
+	description
+from
+	change
+	join p4user using (who_user)
+	join change_desc using (change_desc_id)
+where
+	change between ? and ?
+and	closed = 1
+SQL
+
+	my $insert_commit_mark_sth = $dbh->prepare(<<SQL);
+insert into change_marks
+	(branchpath, change, mark)
+values
+	(?, ?, ?)
+SQL
+
+	while ( my $change_br = $commit_dag->() ) {
+
+		my $change = $change_br->{change};
+		my $bp = $change_br->{branchpath};
+		my $ref = _path2ref($bp);
+		mutter "exporting $bp\@$change to $ref";
+
+		my @parents = $change_br;
+		while ( 1 ) {
+			my $x = $commit_dag->() or last;
+			if ( $x->{branchpath} ne $bp or
+			     $x->{change} != $change
+			   ) {
+				# put it back
+				$commit_dag->($x);
+				last;
+			}
+			push @parents, $x;
+		}
+
+		# fetch a change off
+		my $desc;
+		while ( !$desc or
+			$desc->{change} < $change_br->{change} ) {
+			$desc = $desc_i->()
+				or die "out of changes?!";
+		}
+		# and put the change back!
+		$desc_i->($desc);
+		die "wrong change!"
+			if $desc->{change} != $change_br->{change};
+
+		my ($author, $committer, $description)
+			= make_commit($desc, @parents);
+
+		if ( $VERBOSE > 0 and $o->{long} ) {
+			print "author: @$author\n" if $author;
+			print "committer: @$committer\n";
+			print "$description\n";
+		}
+
+		# write a description
+		my $mark = gfi_start_commit
+			($dbh, $ref, $author, $committer);
+		$cb_marks{$bp}{$change} = $mark;
+		gfi_data(\$description);
+		$insert_commit_mark_sth->execute($bp, $change, $mark);
+
+		# write out the parents
+		my $n = 0;
+		my $from = shift @parents;
+		if ( $from->{branchpath} ne $bp or !$branches{$bp}
+		     or $branches{$bp} != $from->{parent_change}
+		   ) {
+			my $where = $to_ref->($from);
+			whisper "sending 'from' of $where"
+				if $where;
+			gfi_from($where);
+		}
+		if (@parents) {
+			mutter @parents." extra merge parents";
+			$DB::single = 1;
+			gfi_merge(map { $to_ref->($_) } @parents);
+		}
+
+		# now, get all the files in that revision and send
+		# them to gfi
+		while ( my $rev = $files->() ) {
+			if ( $rev->{change} != $change_br->{change} or
+			     $rev->{branchpath} ne $change_br->{branchpath}
+			   ) {
+				$files->($rev);
+				last;
+			}
+
+			if ( $rev->{change_type} eq "delete" ) {
+				if ( $VERBOSE > 0 and $o->{long} ) {
+					print "... D $rev->{relpath}\n";
+				}
+				gfi_filedelete($rev->{relpath});
+			}
+			else {
+				my $ft = $rev->{file_type};
+				my $mode = _p4_type_to_mode($ft);
+				my $dataref = $rev->{blobid} ||
+					":".$rev->{mark};
+				my $relpath =$rev->{relpath};
+				if ( $VERBOSE > 0 and $o->{long} ) {
+					print "... M $rev->{relpath}\n";
+				}
+				gfi_filemodify ($mode, $dataref, $relpath);
+			}
+		}
+		gfi_finish_commit;
+	}
+
+	unless ( $o->{no_checkpoint} ) {
+		gfi_checkpoint($dbh);
+	}
+}
+
+sub make_commit {
+	my $desc = shift;
+	my @parents = @_;
+
+	my $author = undef;
+	my $committer = [ $desc->{realname}, $desc->{email},
+			  $desc->{change_time}." +0000" ];
+
+	my $description = $desc->{description};
+
+	my $branchpath = $parents[0]{branchpath};
+	my $change = $parents[0]{change};
+
+	$description =~ s{\s*\Z}{\n};
+	$description .= "\np4raw-id: $branchpath\@$change";
+
+	my @notes;
+	my $last;
+	for my $p ( @parents ) {
+		if ( $p->{json_info} and
+		     (!$last or $p->{json_info} ne $last)) {
+			$last = $p->{json_info};
+			my $oj = jsonToObj($p->{json_info});
+			push @notes, show_juice($p, $oj);
+		}
+	}
+
+	$author, $committer,
+		join("\n", $description, map { wrap("", "\t", $_) }
+		     @notes);
+}
+
+sub show_juice {
+	my $parent = shift;
+	my $oj = shift;
+	my @glass;
+	if ( $oj->{omitted} and @{$oj->{omitted}} ) {
+		push @glass, join(" ", "p4raw-omitted:",
+				  sort @{ $oj->{omitted} });
+	}
+	if ( $oj->{curious} and @{$oj->{curious}} ) {
+		push @glass, join(" ", "p4raw-curious:",
+				  sort @{ $oj->{curious} });
+	}
+	if ( $oj->{integrated} ) {
+		while ( my ($source_path, $revcx)
+			= each %{$oj->{integrated} }) {
+			my %idx;
+			for my $relpath ( sort keys %$revcx ) {
+				my $x = $revcx->{$relpath};
+				my $hr = $x->{int_subj_headrev};
+				my $max = $x->{int_subj_max_change};
+				$max = $parent->{parent_change} if $hr;
+				my $min = $x->{int_subj_min_change};
+				my $ct = $x->{change_title};
+				my $it = $x->{int_obj_title};
+				push @{ $idx{$max}{$ct}{$it} ||= [] },
+					[$min,$relpath];
+			}
+			my @src_revs = sort { $b<=>$a } keys %idx;
+			for my $rev ( @src_revs ) {
+				my %ctidx = %{$idx{$rev}};
+				for my $ct ( sort keys %ctidx ) {
+					my %i = %{$ctidx{$ct}};
+					(my $past = $ct) =~ s{e?$}{ed};
+					push @glass,
+						join(" ", "p4raw-$past:",
+						     "from $source_path\@$rev",
+						     map {
+							   my $i = $i{$_};
+							   my $last;
+							   s{(?:to| from|d by)$}{};
+							   my @rv;
+							   push @rv, "'$_'";
+							   for my $f (sort { ($a->[0]||0)<=>($b->[0]||0) or
+										     $a->[1] cmp $b->[1] }
+								      @$i ) {
+								   if ( !$last or $last != $f->[0] ) {
+									   if ( $last ) {
+										   push @rv, "(\@$last..)";
+									   }
+								   }
+								   push @rv, $f->[1];
+								   $last = $f->[0];
+							   }
+							   if ( $last ) {
+								   push @rv, "(\@$last..)";
+							   }
+							   @rv
+						   } sort keys %i);
+				}
+			}
+		}
+	}
+	@glass;
+}
+
 sub do_export_commits {
 	my $dbh = shift;
 
+	my %export_opts = parse_export_opts($dbh, "commits", @_);
 
+	gfi_open(\%export_opts);
+
+	export_commit_chunk($dbh, \%export_opts);
+}
+
+our $PREFIX = $ENV{GIT_P4RAW_PREFIX} || "p4";
+
+sub _path2ref {
+        my $branchpath = shift;
+        $branchpath =~ s{^//}{$PREFIX/};
+        #$branchpath =~ s{/}{/}g;
+        "refs/heads/$branchpath";
 }
 
 #=====================================================================
 #  MAIN SECTION STARTS HERE
 #=====================================================================
-getopt("script|s" => \$SCRIPT_MODE);
+getopt("script|s" => \$SCRIPT_MODE,
+       "prefix=s" => \$PREFIX,
+      );
 if (! -t STDOUT) {
 	$SCRIPT_MODE = 1;
 }
