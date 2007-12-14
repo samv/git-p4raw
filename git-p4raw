@@ -2397,6 +2397,11 @@ sub gfi_checkpoint {
 		goto commit;
 	}
 
+	# send a dummy blob to make sure gfi writes marks out
+	gfi_send_blob $dbh,
+		\(join("", map { chr(rand(64)+33) } (1..3))
+		  x rand(32) );
+
 	my $last_mtime = (stat $MARKS_FILE)[9];
 	say "Now checkpointing.";
 	print GFI "checkpoint\n\n";
