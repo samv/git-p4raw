@@ -2966,6 +2966,7 @@ values
 	(?, ?, ?)
 SQL
 
+ change:
 	while ( my $change_br = $commit_dag->() ) {
 
 		my $change = $change_br->{change};
@@ -2990,8 +2991,11 @@ SQL
 		my $desc;
 		while ( !$desc or
 			$desc->{change} < $change_br->{change} ) {
-			$desc = $desc_i->()
-				or die "out of changes?!";
+			$desc = $desc_i->() or do {
+				moan "out of changes!  looking for"
+					." $change_br->{change}";
+				last change;
+			};
 		}
 		# and put the change back!
 		$desc_i->($desc);
