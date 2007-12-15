@@ -2966,6 +2966,18 @@ values
 	(?, ?, ?)
 SQL
 
+	say "gathering export plan";
+	$commit_dag->($commit_dag->());
+	$files->($files->());
+
+	say "exporting commits between $o->{min} and $o->{max}";
+	my ($tpb, $next_update);
+	if ( $o->{verbose} >= 0 ) {
+		$tpb  = eval { Term::ProgressBar->new
+				({ count => $o->{chunk_size},
+				   ETA => "linear",
+				 }) };
+	}
  change:
 	while ( my $change_br = $commit_dag->() ) {
 
@@ -3064,7 +3076,16 @@ SQL
 			}
 		}
 		gfi_finish_commit;
+
+		my $done_revisions =
+			($o->{chunk_size} - ($o->{max} - $change));
+		if ( $tpb and
+		     ( not $next_update or
+		       $done_revisions >= $next_update ) ) {
+			$next_update = $tpb->update($done_revisions);
+		}
 	}
+	$tpb->update($o->{chunk_size}) if $tpb;
 
 	unless ( $o->{no_checkpoint} ) {
 		gfi_checkpoint($dbh);
