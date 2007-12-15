@@ -80,6 +80,16 @@ sub do_drop {
 
 sub do_load {
 	my $dbh = shift;
+
+	my %load_opts;
+	{
+		@ARGV = @_;
+		getopt("r|reload" => \$load_opts{reload},
+		       "f|force" => \$load_opts{force},
+		      );
+		@_ = @ARGV;
+	}
+
 	my @files;
 	if ( @_ ) {
 		@files = @_;
@@ -88,21 +98,57 @@ sub do_load {
 		@files = grep { -f }
 			(<journal checkpoint journal.*.gz checkpoint.*.gz>,
 			 <p4raw-extra-*.asv>);
-		# don't load any checkpoints or journals earlier than
-		# the latest checkpoint
-		my $max_checkpoint = max map { m{checkpoint.(\d+).gz} }
-			@files;
-		if ( $max_checkpoint ) {
-			@files = grep { !m{(checkpoint|journal).(\d+).gz} or
-						($2 >= $max_checkpoint) }
-				@files;
-		}
 	}
+
+	goto no_filter if $load_opts{force};
+	my $already_got = row_iter($dbh, <<'SQL')->();
+select
+	max(regexp_replace(source_file, E'.*\\.([0-9]*)\\.gz.*', E'\\1'))
+from
+	(select distinct
+		source_file
+	from
+		change
+	where
+		source_file ~ '(journal|checkpoint).[0-9]*.gz') as x
+SQL
+	# don't load any checkpoints or journals earlier than
+	# the last labelled file we read
+	my $min_interesting = ($already_got->{max}||-1) + 1;
+	my $min_checkpoint = max
+		((map {
+			m{checkpoint.(\d+).gz} ? $1 : 0
+		} @files),
+		 $min_interesting-1);
+	$min_interesting = $min_checkpoint
+		unless $min_interesting >= $min_checkpoint;
+
+	if ( $min_checkpoint ) {
+		@files = grep {
+			if ( ( m{(checkpoint|journal).(\d+).gz}
+			       and $2 < $min_interesting ) ) {
+				say "ignoring $_ - not interesting";
+				0;
+			}
+			elsif ( ( m{journal.(\d+).gz}
+				  and $1 <= $min_checkpoint ) ) {
+				say "ignoring $_ - using checkpoint";
+				0;
+			} else {
+				1;
+			}
+		} @files;
+	}
+	say "Remaining files: @files";
+	no_filter:
+
+	my %sth;
 	while ( my $filename = shift @files ) {
 		say "loading data from $filename";
 		start_timer;
+		my $open_filename = $filename;
 		if ( $filename =~ m{\.gz$} ) {
-			$filename = "zcat $filename|";
+			$open_filename = "zcat $filename|";
 		}
 		my %wanted =
 			( "db.desc" => "change_desc",
@@ -113,10 +159,17 @@ sub do_load {
 			  "db.rev" => "rev",
 			  "db.label" => "label",
 			);
-		my %sth;
 		my $get_sth = sub {
 			my ($table, $size)=@_;
 			$sth{$table."\0".$size} ||= do {
+				if ( $load_opts{reload} ) {
+					$dbh->do(<<SQL)
+create temporary table "${table}_new" (like "${table}")
+SQL
+					unless (grep m{^\Q$table\E\0},
+						keys %sth);
+					$table .= "_new";
+				}
 				my $sql = "INSERT INTO $table "
 					."VALUES (".join(",",("?")x$size).")";
 				whisper "Preparing: $sql";
@@ -125,7 +178,7 @@ sub do_load {
 		};
 		my $wanted_re = join "|", keys %wanted;
 		my $regex_wanted = qr/(?:$wanted_re)/;
-		open JOURNAL, "$filename" or die $!;
+		open JOURNAL, "$open_filename" or die $!;
 		#binmode JOURNAL, ":encoding(iso-8859-1)";
 		my ($rows, $dirty, $dirty_rows);
 		$dbh->begin_work;
@@ -167,9 +220,9 @@ sub do_load {
 				}
 			}
 			@columns = (@columns[3..$#columns]);
-			my $sth = $get_sth->($db,scalar(@columns));
+			my $sth = $get_sth->($db,scalar(@columns)+1);
 			eval {
-				$sth->execute(@columns);
+				$sth->execute($filename, @columns);
 				$rows++;
 				$dirty_rows++;
 				$dirty+=sum map { length } @columns;
@@ -194,7 +247,40 @@ sub do_load {
 		}
 		$dbh->commit;
 		$dbh->{AutoCommit} = 1;
-		say "Loaded $rows rows from $filename in ".show_elapsed;
+		say "Loaded $rows rows from $filename in ".show_elapsed
+			if $rows;
+	}
+
+	if ( $load_opts{reload} ) {
+		my @tables = keys
+			%{{ map { $_ => 1 } map { m{(.*)\0} }
+				    keys %sth }};
+		# Oh, whither MERGE INTO :)
+		$dbh->begin_work;
+		for my $table ( @tables ) {
+			my $keys = $dbh->primary_key_info
+				('', '', $table, {pg_onerow => 1})
+					->fetchall_arrayref->[0][3];
+			(my $first_key = $keys) =~ s{,.*}{}
+				or do {
+					moan "$table has no primary key!";
+					moan "did NOT load ${table}_new in";
+					next;
+				};
+			$dbh->do(<<SQL);
+select
+	tn.*
+into
+	"$table"
+from
+	"${table}_new" tn
+ 	left join "$table".n
+		using ($keys)
+where
+	$first_key is null
+SQL
+		}
+		$dbh->commit;
 	}
 }
 
