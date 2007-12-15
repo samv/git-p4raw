@@ -352,7 +352,7 @@ sub do_check {
 		my ($comment, $sql) = ($1, $2);
 		if ( $comment ) {
 			$comment =~ s{^\s*--\s*}{}mg;
-			if ( $comment =~ s{^FOUND: ((?-s:.*))\n}{}ms ) {
+			if ( $comment =~ s{^FOUND: ((?-s:.*))\n?}{}ms ) {
 				$do_this = $1;
 			}
 			else {
