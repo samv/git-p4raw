@@ -88,6 +88,15 @@ sub do_load {
 		@files = grep { -f }
 			(<journal checkpoint journal.*.gz checkpoint.*.gz>,
 			 <p4raw-extra-*.asv>);
+		# don't load any checkpoints or journals earlier than
+		# the latest checkpoint
+		my $max_checkpoint = max map { m{checkpoint.(\d+).gz} }
+			@files;
+		if ( $max_checkpoint ) {
+			@files = grep { !m{(checkpoint|journal).(\d+).gz} or
+						($2 >= $max_checkpoint) }
+				@files;
+		}
 	}
 	while ( my $filename = shift @files ) {
 		say "loading data from $filename";
