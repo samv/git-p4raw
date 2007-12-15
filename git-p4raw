@@ -2137,7 +2137,7 @@ sub index_for_version {
 				     =~ s{^\Q$path\E/?}{};
 
 			     $index{$relative} =
-				     [ $row->{md5sum}, $row->{mark},
+				     [ $row->{revision_md5}, $row->{mark},
 				       $row->{blobid}, $relative, $row->{last_change} ];
 		     },
 		   });
