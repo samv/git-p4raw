@@ -3199,6 +3199,20 @@ sub do_export_commits {
 	export_commit_chunk($dbh, \%export_opts);
 }
 
+sub do_export {
+	my $dbh = shift;
+
+	my %export_opts = parse_export_opts($dbh, "commits", @_);
+
+	gfi_open(\%export_opts);
+
+	$export_opts{no_checkpoint} = 1;
+	export_blob_chunk($dbh, \%export_opts);
+	delete $export_opts{no_checkpoint};
+	export_commit_chunk($dbh, \%export_opts);
+
+}
+
 our $PREFIX = $ENV{GIT_P4RAW_PREFIX} || "p4";
 
 sub _path2ref {
@@ -3244,8 +3258,9 @@ git-p4raw - git fast-import exporter for RAW perforce repositories
  git-p4raw init     # to return here: git-p4raw drop
  git-p4raw load
  git-p4raw check
+ git-p4raw find-branches            # detect branches
  git-p4raw graft CHANGE commit-ish  # configure manual reparenting
- git-p4raw import   # to return here: git-p4raw truncate
+ git-p4raw export                   # detect branches
 
  # query commands:
  git-p4raw { find-change N | describe N | integrated DEPOTPATH
@@ -3372,11 +3387,11 @@ F<p4raw-extra-grafts.asv> on completion, so that it can be re-loaded
 should a subsequent C<git-p4raw drop> happen.  The data in this table
 is unable to be checked for integrity at C<git-p4raw check> time.
 
-=item C<git-p4raw export [ CHG[..CHG] | -n NUM ]> (TODO)
+=item C<git-p4raw export [ CHG[..CHG] | -n NUM ]>
 
 =item C<git-p4raw export-blobs [ CHG[..CHG] | -n NUM ]>
 
-=item C<git-p4raw export-commits [ CHG[..CHG] | -n NUM ]> (TODO)
+=item C<git-p4raw export-commits [ CHG[..CHG] | -n NUM ]>
 
 Export a bunch of changes (or, just the blobs, or just the commits)
 bounded by a range of revisions or the next NUM revisions, to a C<git
@@ -3451,8 +3466,18 @@ to F<//depot/perl>.
 However, this is not yet quite enough to prove that the integration
 information in the change is a cross-merge; we also need to show that
 there are changes between the I<merge base> of the two branches that
-could have been merged, but are not mentioned.  That half of the
-equation is currently TODO.
+could have been merged, but are not mentioned.  So, if there are any
+merge candidates they are all inspected to see if there are any files
+which were not merged.  The results are totalled up and displayed.  If
+you add C<-w> to the C<describe> command, then it will save the
+information in the C<grafts> table.
+
+=item C<git-p4raw find-branches [STARTREV[..REV]]>
+
+Scan the changes from STARTREV to REV and try to find branches.
+
+This command is equivalent to running C<git-p4raw describe N -w>
+successively for each change.
 
 =item C<git-p4raw integrated DEPOTPATH>
 
