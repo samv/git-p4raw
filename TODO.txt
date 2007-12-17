@@ -1,0 +1,19 @@
+
+ - the change_parents table has a horrid denormalised JSON dump of
+   impedence mismatches that is never recalculated unless you delete
+   the change_parents row.
+
+   Upon reflection, I think the only information I need to keep there
+   to regenerate the merge conflict is the merge base, so I'll do away
+   with that horrid beast first.
+
+ - there are several queries which I wrote before I discovered SELECT
+   DISTINCT ON (column, column) that should be rewritten (I discovered
+   this perhaps a few days ago!).  In particular the views, defined in
+   constraints.sql, use stupid NOT EXISTS () subqueries.  These must go.
+
+ - No clean-up of the commit message from the information embedded in
+   the Perl perforce repository is yet performed.  Need to extract the
+   author information and change the Author field of the commit.  This
+   is not a TODO for the general tool; people may just customise the
+   make_commit() function for their site.
