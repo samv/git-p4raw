@@ -3534,6 +3534,85 @@ SQL
 
 }
 
+sub do_graft {
+	my $dbh = shift;
+	my %graft_opts;
+	{
+		@ARGV = @_;
+		my @gfi_options;
+		getopt("a" => \$graft_opts{add},
+		       "d=i" => \$graft_opts{delete},
+		      );
+		@_ = @ARGV;
+	}
+	abort "bogus extra arguments: @_"
+		if @_ and $graft_opts{delete};
+	$dbh->begin_work;
+	if ( $graft_opts{delete} or !$graft_opts{add} ) {
+		$dbh->do(<<SQL);
+delete from change_parents
+where manual
+SQL
+	}
+	my ($change, @parents);
+	my $c2bpc = sub {
+		my $change = shift;
+		my $cbi = change_branches_iter($dbh, $change, "eq");
+		my $row = $cbi->()
+			or barf "no depotpaths for change $change";
+		abort "multiple branches matched by spec $change"
+			if $cbi->();
+		($row->{branchpath}, $row->{change});
+	};
+	my @places;
+	while ( my $change = shift ) {
+		if ( $change =~ m{^(//.+)@(\d+)$} ) {
+			$change = [$1,$2];
+		}
+		elsif ( $change =~ m{^\d+$} ) {
+			$change = [$c2bpc->($change)];
+		}
+		else {
+			my ($rc, $ref) =
+				capture_err qw(git rev-parse), $change;
+			if ( $rc ) {
+				barf "bad change/ref '$ref'";
+			}
+			chomp($ref);
+		}
+		push @places, $change;
+	}
+	if ( @places == 1 ) {
+		abort "bad number of arguments to graft";
+	}
+	elsif ( @places ) {
+		my $top = shift @places;
+		if ( !ref $top ) {
+			abort "can't graft onto git ref '$top' - only "
+				."branchpaths"
+		}
+		for my $graft ( @places ) {
+			if ( ref $graft ) {
+				$dbh->do(<<SQL,undef,@$top,@$graft);
+insert into change_parents
+	(branchpath, change, parent_branchpath, parent_change)
+values
+	(?, ?, ?, ?)
+SQL
+			}
+			else {
+				$dbh->do(<<SQL,undef,@$top,$graft);
+insert into change_parents
+	(branchpath, change, ref)
+values
+	(?, ?, ?)
+SQL
+			}
+		}
+	}
+	$dbh->commit;
+}
+
 #=====================================================================
 #  MAIN SECTION STARTS HERE
 #=====================================================================
@@ -3688,16 +3767,15 @@ The C<graft> command is optional, and is principally for those who
 want to override the decisions that this tool makes (and modifies what
 is shown ahead of time using the C<describe> sub-command, see below).
 
-If you just specify two change numbers, then the detected branch paths
-for those changes is used.  Bear in mind that this detection will
-frequently be wrong, unless you already have a partial conversion
-underway.
-
 When grafts are specified, they I<replace> the detected parents
 completely.  Use C<-a> to add to the detected/already configured
 parents.
 
-To get around this, specify your grafting with the path as well, eg:
+You can specify just a change number, in which case the (presumably
+only) branch effected in that change will be specified.  You should
+have already run find-branches to do that.
+
+Disambiguate by prefixing the change with the branch path:
 
    git-p4raw -a //depot/perl@18 //depot/ansiperl@17
 
@@ -3708,12 +3786,67 @@ If a "change" parses as a git commit ID via C<git rev-parse>, it is
 treated as external to the data being imported.  Do B<not> use commit
 IDs or references from previous import runs here!
 
-The C<-d> option will reset existing grafts for a change.
+The C<-d> option will reset existing grafts for a change by deleting
+all the manual ones.
 
-This command dumps all of the configured changes to the file
-F<p4raw-extra-grafts.asv> on completion, so that it can be re-loaded
-should a subsequent C<git-p4raw drop> happen.  The data in this table
-is unable to be checked for integrity at C<git-p4raw check> time.
+Note: use B<git-p4raw dump> to save the grafts you make to journal
+files so that they can be reloaded later on if you choose to.
+
+For example, this was the initial graft for Perl's Perforce
+repository:
+
+  git-p4raw graft 1 perl-5.003
+
+An example interactive session:
+
+  maia:~/src/p4-rsync$ git-p4raw describe 17
+  Change 17 by mbeattie@localhost on 1997/05/25 06:46:49
+  
+          Wholesale update to 5.004.
+  
+  On path //depot/relperl,
+          add 291 file(s)
+          delete 27 file(s)
+          edit 392 file(s)
+  
+  Parent: //depot/relperl@16
+  maia:~/src/p4-rsync$ git-p4raw graft 17 16 perl-5.004
+  maia:~/src/p4-rsync$ git-p4raw describe 17
+  Change 17 by mbeattie@localhost on 1997/05/25 06:46:49
+  
+          Wholesale update to 5.004.
+  
+  On path //depot/relperl,
+          add 291 file(s)
+          delete 27 file(s)
+          edit 392 file(s)
+  
+  Parent: //depot/relperl@16 (manual)
+  Parent: perl-5.004
+  maia:~/src/p4-rsync$ git-p4raw export-commits -v 2..17
+  git-p4raw: gathering export plan
+  git-p4raw: exporting commits between 2 and 17
+  git-p4raw: exporting //depot/perl@2 to refs/heads/p4/depot/perl
+  git-p4raw: exporting //depot/thrperl@3 to refs/heads/p4/depot/thrperl
+  git-p4raw: exporting //depot/thrperl@4 to refs/heads/p4/depot/thrperl
+  git-p4raw: exporting //depot/thrperl@5 to refs/heads/p4/depot/thrperl
+  git-p4raw: exporting //depot/perlext/Thread@6 to refs/heads/p4/depot/perlext/Thread
+  git-p4raw: exporting //depot/perlext/Thread@7 to refs/heads/p4/depot/perlext/Thread
+  git-p4raw: exporting //depot/thrperl@8 to refs/heads/p4/depot/thrperl
+  git-p4raw: exporting //depot/thrperl@9 to refs/heads/p4/depot/thrperl
+  git-p4raw: exporting //depot/perlext/Compiler@10 to refs/heads/p4/depot/perlext/Compiler
+  git-p4raw: exporting //depot/perlext/Compiler@11 to refs/heads/p4/depot/perlext/Compiler
+  git-p4raw: exporting //depot/perlext/Compiler@12 to refs/heads/p4/depot/perlext/Compiler
+  git-p4raw: exporting //depot/perlext/Compiler@13 to refs/heads/p4/depot/perlext/Compiler
+  git-p4raw: exporting //depot/perlext/Compiler@14 to refs/heads/p4/depot/perlext/Compiler
+  git-p4raw: exporting //depot/relperl@16 to refs/heads/p4/depot/relperl
+  git-p4raw: exporting //depot/relperl@17 to refs/heads/p4/depot/relperl
+  git-p4raw: 1 extra merge parents
+  git-p4raw: Now checkpointing.
+  git-p4raw: waited 1s for p4raw.21152.marks to be created
+  git-p4raw: wrote 16 marks to DB
+
+=cut
 
 =item C<git-p4raw export [ CHG[..CHG] | -n NUM ]>
 
@@ -4066,73 +4199,3 @@ this, insert into the change_marks and marks tables.
 This is useful for grafting the first change on from any pre-perforce
 archaeological remains that your project might have.
 
-=head2 Grafting
-
- insert into change_parents (change,branchpath,ref)
- values (1,'//depot/perl','perl-5.003');
-
-Etc.
-
-An example interactive session:
-
-  maia:~/src/p4-rsync$ git-p4raw describe 17
-  Change 17 by mbeattie@localhost on 1997/05/25 06:46:49
-  
-          Wholesale update to 5.004.
-  
-  On path //depot/relperl,
-          add 291 file(s)
-          delete 27 file(s)
-          edit 392 file(s)
-  
-  Parent: //depot/relperl@16
-  maia:~/src/p4-rsync$ psql
-  Welcome to psql 8.2.4, the PostgreSQL interactive terminal.
-  
-  Type:  \copyright for distribution terms
-         \h for help with SQL commands
-         \? for help with psql commands
-         \g or terminate with semicolon to execute query
-         \q to quit
-  
-  pumpkin=# insert into change_parents (change,branchpath,ref) values (17,'//depot/relperl','perl-5.004');
-  INSERT 0 1
-  pumpkin=# insert into change_parents (change,branchpath,parent_branchpath,parent_change) values (17,'//depot/relperl','//depot/relperl',16);
-  INSERT 0 1
-  pumpkin=# \q
-  maia:~/src/p4-rsync$ git-p4raw describe 17
-  Change 17 by mbeattie@localhost on 1997/05/25 06:46:49
-  
-          Wholesale update to 5.004.
-  
-  On path //depot/relperl,
-          add 291 file(s)
-          delete 27 file(s)
-          edit 392 file(s)
-  
-  Parent: //depot/relperl@16 (manual)
-  Parent: perl-5.004
-  maia:~/src/p4-rsync$ git-p4raw export-commits -v 2..17
-  git-p4raw: gathering export plan
-  git-p4raw: exporting commits between 2 and 17
-  git-p4raw: exporting //depot/perl@2 to refs/heads/p4/depot/perl
-  git-p4raw: exporting //depot/thrperl@3 to refs/heads/p4/depot/thrperl
-  git-p4raw: exporting //depot/thrperl@4 to refs/heads/p4/depot/thrperl
-  git-p4raw: exporting //depot/thrperl@5 to refs/heads/p4/depot/thrperl
-  git-p4raw: exporting //depot/perlext/Thread@6 to refs/heads/p4/depot/perlext/Thread
-  git-p4raw: exporting //depot/perlext/Thread@7 to refs/heads/p4/depot/perlext/Thread
-  git-p4raw: exporting //depot/thrperl@8 to refs/heads/p4/depot/thrperl
-  git-p4raw: exporting //depot/thrperl@9 to refs/heads/p4/depot/thrperl
-  git-p4raw: exporting //depot/perlext/Compiler@10 to refs/heads/p4/depot/perlext/Compiler
-  git-p4raw: exporting //depot/perlext/Compiler@11 to refs/heads/p4/depot/perlext/Compiler
-  git-p4raw: exporting //depot/perlext/Compiler@12 to refs/heads/p4/depot/perlext/Compiler
-  git-p4raw: exporting //depot/perlext/Compiler@13 to refs/heads/p4/depot/perlext/Compiler
-  git-p4raw: exporting //depot/perlext/Compiler@14 to refs/heads/p4/depot/perlext/Compiler
-  git-p4raw: exporting //depot/relperl@16 to refs/heads/p4/depot/relperl
-  git-p4raw: exporting //depot/relperl@17 to refs/heads/p4/depot/relperl
-  git-p4raw: 1 extra merge parents
-  git-p4raw: Now checkpointing.
-  git-p4raw: waited 1s for p4raw.21152.marks to be created
-  git-p4raw: wrote 16 marks to DB
-
-=cut
