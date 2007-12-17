@@ -23,6 +23,7 @@ insert into int_type values
 
 -- integration history (branch/merge/ignore)
 create table integed (
+    source_file text not null,
     subject text not null,	-- what file this log refers to
     object  text not null,	-- file the record refers to in objective
     object_minrev int not null,	-- objective revisions range - lower bound
@@ -30,13 +31,13 @@ create table integed (
     subject_minrev int not null, -- subject revision range - lower
     subject_maxrev int not null, -- upper
     int_type int not null references int_type,
-    change int not null		-- Change this occurred in
-    --primary key (revision, subject, subject_maxrev, object, int_type)
+    change int not null,	-- Change this occurred in
+    primary key (change, subject, subject_maxrev, object, object_maxrev)
 );
 
 create table p4user (
+    source_file text not null,
     who_user text, -- username
-    primary key (who_user),
     email text,    -- e-mail address
     junk text,     -- always empty?
     effective int, -- a guess.
@@ -50,6 +51,7 @@ create table p4user (
 
 -- change master records
 create table change (
+    source_file text not null,
     change int not null primary key,
     change_desc_id int,	-- this almost always contained the same value as
 			-- 'change', or a dead revision.  The one time it
@@ -58,12 +60,13 @@ create table change (
     who_host text,
     who_user text,
     change_time int, 	-- epoch time of change
-    closed int,		-- whether this change is committed yet
+    closed int,		-- whether this change is committed yet jjjjjjj
     short_desc text     -- short description of change
 );
 
 -- change description table
 create table change_desc (
+    source_file text not null,
        change_desc_id INT not null primary key,
        description TEXT
 );
@@ -84,6 +87,7 @@ insert into change_type values
 
 -- change inventories for revisions
 create table revcx (
+    source_file text not null,
        change int not null,	-- change this occurred in
        depotpath text,		-- what changed
        primary key (change, depotpath),
@@ -95,6 +99,7 @@ create table revcx (
 
 -- detail on depot RCS files
 create table rev (
+    source_file text not null,
        depotpath TEXT,
        revision INT,
        primary key (depotpath, revision),
@@ -123,6 +128,7 @@ create table rev (
 
 -- tags
 create table label (
+    source_file text not null,
        tagname TEXT not null,
        depotpath TEXT not null,
        primary key (tagname, depotpath),
@@ -132,6 +138,7 @@ create table label (
 -- this table holds the marks that we send to git fast-import
 create sequence gfi_mark;
 create table marks (
+    source_file text not null default 'new',
 	mark int not null primary key,
 	commitid char(40) null,
 	blobid char(40) null,
@@ -143,6 +150,7 @@ create table marks (
 
 -- mapping file revisions to marks - join with marks to get blobids
 create table rev_marks (
+    source_file text not null default 'new',
 	depotpath TEXT not null,
 	revision int not null,
 	primary key (depotpath,revision),
@@ -151,6 +159,7 @@ create table rev_marks (
 
 -- what branches we determined exist along the way
 create table change_branches (
+    source_file text not null default 'new',
        branchpath TEXT not null,
        change INT null,
        primary key (branchpath, change)
@@ -159,6 +168,7 @@ create table change_branches (
 -- mapping changes to branches and marks - join with marks to get
 -- commitids
 create table change_marks (
+    source_file text not null default 'new',
 	branchpath TEXT not null,
 	change int not null,
 	primary key (branchpath, change),
@@ -168,11 +178,13 @@ create table change_marks (
 
 -- parentage of changes
 create table change_parents (
+    source_file text not null default 'new',
 	branchpath TEXT not null,
 	change int not null,
 
 	parent_branchpath TEXT null,
 	parent_change int null,
+	primary key (branchpath, change, parent_branchpath, parent_change),
 
 	ref TEXT null,
 	manual boolean NOT NULL default true,

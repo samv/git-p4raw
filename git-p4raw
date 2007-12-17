@@ -3,6 +3,7 @@
 use strict vars, subs;
 use warnings;
 use Scriptalicious;
+use Maptastic;
 use FindBin qw($Bin);
 use List::Util qw(sum max min);
 use Scalar::Util qw(looks_like_number);
@@ -120,6 +121,8 @@ SQL
 			m{checkpoint.(\d+).gz} ? $1 : 0
 		} @files),
 		 $min_interesting-1);
+	mutter "min interesting: $min_interesting";
+	mutter "min checkpoint:  $min_checkpoint";
 	$min_interesting = $min_checkpoint
 		unless $min_interesting >= $min_checkpoint;
 
@@ -127,12 +130,12 @@ SQL
 		@files = grep {
 			if ( ( m{(checkpoint|journal).(\d+).gz}
 			       and $2 < $min_interesting ) ) {
-				say "ignoring $_ - not interesting";
+				mutter "ignoring $_ - not interesting";
 				0;
 			}
 			elsif ( ( m{journal.(\d+).gz}
 				  and $1 <= $min_checkpoint ) ) {
-				say "ignoring $_ - using checkpoint";
+				mutter "ignoring $_ - using checkpoint";
 				0;
 			} else {
 				1;
@@ -158,17 +161,25 @@ SQL
 			  "db.user" => "p4user",
 			  "db.rev" => "rev",
 			  "db.label" => "label",
+			  "db.change_branches" => "change_branches",
+			  "db.change_parents" => "change_parents",
+			  "db.marks" => "marks",
+			  "db.rev_marks" => "rev_marks",
+			  "db.change_marks" => "change_marks",
 			);
 		my $get_sth = sub {
 			my ($table, $size)=@_;
 			$sth{$table."\0".$size} ||= do {
 				if ( $load_opts{reload} ) {
-					$dbh->do(<<SQL)
+					unless (scalar(grep m{^\Q$table\E\0},
+						       keys %sth) > 1) {
+						$dbh->do(<<SQL)
 create temporary table "${table}_new" (like "${table}")
 SQL
-					unless (grep m{^\Q$table\E\0},
-						keys %sth);
+							or die $dbh->errstr;
+					}
 					$table .= "_new";
+					mutter "loading into temp table $table";
 				}
 				my $sql = "INSERT INTO $table "
 					."VALUES (".join(",",("?")x$size).")";
@@ -191,11 +202,12 @@ SQL
 			my @columns;
 			while ( (pos($_)||0)+1 < length $_ ) {
 				my $pre = pos $_;
-				my $ok = m{\G(?:\@((?:[^@]+|\@\@)*)\@|(-?\w+))\s}g;
+				my $ok = m{\G(?:\@((?:[^@]+|\@\@)*)\@|(-?\w+)|(\\N))\s}g;
 				if ( !$ok ) {
 					pos($_) = $pre;
 				}
-				my ($string, $token) = ($1, $2) if $ok;
+				my ($string, $token, $null)
+					= ($1, $2, $3) if $ok;
 				if ( defined $string ) {
 					$string =~ s{\@\@}{\@}g;
 					utf8::upgrade($string);
@@ -203,6 +215,9 @@ SQL
 				}
 				elsif ( defined $token ) {
 					push @columns, $token;
+				}
+				elsif ( $null ) {
+					push @columns, undef;
 				}
 				else {
 					die "end of file; $_" if eof JOURNAL;
@@ -225,7 +240,9 @@ SQL
 				$sth->execute($filename, @columns);
 				$rows++;
 				$dirty_rows++;
-				$dirty+=sum map { length } @columns;
+				$dirty+=sum map {
+					defined($_) ? length($_) : 0
+				} @columns;
 				if ( $VERBOSE > 1 ) {
 					print "Saved: $columns[0]\n";
 				}
@@ -258,27 +275,35 @@ SQL
 		# Oh, whither MERGE INTO :)
 		$dbh->begin_work;
 		for my $table ( @tables ) {
-			my $keys = $dbh->primary_key_info
-				('', '', $table, {pg_onerow => 1})
-					->fetchall_arrayref->[0][3];
-			(my $first_key = $keys) =~ s{,.*}{}
+			my $sth = $dbh->primary_key_info
+				('', '', $table, {pg_onerow => 1});
+			if ( !$sth ) {
+				moan "failed to get primary key info for "
+					.$table;
+				next;
+			}
+			my $keys = $sth->fetchall_arrayref->[0][3]
 				or do {
 					moan "$table has no primary key!";
 					moan "did NOT load ${table}_new in";
 					next;
 				};
-			$dbh->do(<<SQL);
+			(my $first_key = $keys) =~ s{,.*}{};
+			say "merging ${table}_new into $table";
+			my $sql = <<SQL;
+insert into
+	"$table"
 select
 	tn.*
-into
-	"$table"
 from
 	"${table}_new" tn
- 	left join "$table".n
+ 	left join "$table" ttotheo
 		using ($keys)
 where
-	$first_key is null
+	ttotheo.$first_key is null
 SQL
+			mutter "with: ", $sql;
+			$dbh->do($sql);
 		}
 		$dbh->commit;
 	}
@@ -293,8 +318,13 @@ sub _to_p4_journal_format {
 				$x
 			}
 			else {
-				$x =~ s{\@}{\@\@}g;
-				"\@$x\@"
+				if ( defined $x ) {
+					$x =~ s{\@}{\@\@}g;
+					"\@$x\@"
+				}
+				else {
+					'\N'
+				}
 			}
 		} ("pv", 3, "db.$db_name", @_))."\n");
 }
@@ -336,9 +366,7 @@ sub add_p4users {
 sub do_check {
 	my $dbh = shift;
 
-	if ( $VERBOSE > 0 ) {
-		require Text::CSV_XS;
-	}
+	require Text::CSV_XS;
 
 	open SQL, "<$SHARE/constraints.sql" or die $!;
 	my $constraints = join "", <SQL>;
@@ -358,7 +386,7 @@ sub do_check {
 			else {
 				undef($do_this);
 			}
-			if ( $comment =~ s{^ONEROW(?-s:.*)\n}{}ms ) {
+			if ( $comment =~ s{^ONEROW(?-s:.*)\n?}{}ms ) {
 				$one_row = 1;
 			}
 			else {
@@ -805,6 +833,7 @@ sub do_describe {
 		@ARGV = @_;
 		getopt( "l" => \$desc_opts{long},
 			"w" => \$write,
+			"f" => \$desc_opts{derive_again},
 		      );
 		@_ = @ARGV;
 	}
@@ -845,6 +874,7 @@ sub change_branches_iter {
 	my $dbh = shift;
 	my $change = shift;
 	my $what = shift;
+	my $o = shift;
 	my ($filter, $select, $group);
 	if ( $what eq "eq" ) {
 		$filter = "change = ?";
@@ -860,22 +890,26 @@ sub change_branches_iter {
 		$select = "min(change) as change";
 		$group = 1;
 	}
-	my $sth = $dbh->prepare(<<SQL.($group?<<SQL:""));
+	my $join = "";
+	if ( $o->{commits} ) {
+		$join = "\tjoin change_marks using (branchpath,change)\n"
+			."\tjoin marks using (mark)\n";
+		$select .= ",\n\tcommitid";
+	}
+	my $sql = (<<SQL.($group?<<SQL:""));
 select
 	branchpath,
 	$select
 from
 	change_branches
+$join
 where
 	$filter
 SQL
 group by
 	branchpath
 SQL
-	$sth->execute( $change );
-	return sub {
-		$sth->fetchrow_hashref;
-	};
+	row_iter($dbh, $change, $sql);
 }
 
 sub derive_branch_src {
@@ -1104,7 +1138,7 @@ SQL
 							$old_integed{\0}++;
 						}
 						if ( my $oi = $old_integed{$relpath} ) {
-							print wrap("", "", "BUT HOLD IT!  In change $oi->{change}, there was an $source_path $oi->{title} $path ($oi->{description}).  That'll do us.\n")
+							print "BUT HOLD IT!  In change $oi->{change}, there was an $source_path $oi->{title} $path ($oi->{description}).  That'll do us.\n"
 								unless $moan_count > 10;
 						}
 						else {
@@ -1203,6 +1237,7 @@ THIS
 					$source_path => \%revcx_by_relpath;
 				next;
 			}
+			#FIXME - these often aren't 'manual'
 			$manual = 1;
 			push @extra_per_src,
 				(manual => 1,
@@ -1270,18 +1305,41 @@ sub do_show_branches {
 	if ( $change !~ m{^\d+$} ) {
 		abort "bad change # '$change'";
 	}
-	my $branches = change_branches_iter($dbh, $change, "max");
+	my $branches = row_iter($dbh, $change, <<SQL);
+select distinct on (cb.branchpath)
+	cb.branchpath,
+	cb.change,
+	cm.commitid
+from
+	change_branches cb
+	left join
+		(select
+			change,
+			branchpath,
+			commitid
+		from
+			change_marks
+			join marks using (mark)) cm
+	using (change, branchpath)
+where
+	change <= ?
+order by
+	cb.branchpath,
+	change desc
+SQL
 	my %branches;
 	while ( my $x = $branches->() ) {
-		$branches{$x->{branchpath}} = $x->{change};
+		$branches{$x->{branchpath}} = [$x->{change},$x->{commitid}];
 	}
 	my $length = max map { length $_ } keys %branches;
-	my $num_length = max map { length $_ } values %branches;
+	my $num_length = max map { length $_ } map { $_->[0] } values %branches;
 	for my $branch ( sort keys %branches ) {
 		print $branch, (" " x ($length - length($branch)
 				       + $num_length
-				       - length($branches{$branch}) + 1)),
-			"$branches{$branch}\n";
+				       - length($branches{$branch}[0]) + 1)),
+			($branches{$branch}[0], " ",
+			 substr($branches{$branch}[1], 0, 12),
+			 "\n");
 	}
 }
 
@@ -1639,6 +1697,7 @@ SQL
 				$show_parent->($_);
 			}
 		}
+		$DB::single = 1;
 		my $has_other_paths = grep { length && $_ ne $path }
 			keys %$POc;
 
@@ -1659,7 +1718,7 @@ SQL
 		}
 		elsif ( grep { length && $_ ne $path } keys %$POc ) {
 			# some inter-branch action.
-			if ( !$know_parents ) {
+			if ( !$know_parents or $o->{derive_again} ) {
 				derive_extra_parents $dbh, $path, $change,
 					$PcO, $POc,
 					\%prev_paths,
@@ -2229,7 +2288,8 @@ sub min_change {
 SQL
 		$having = <<SQL;
 having
-	count(rm.mark)=0
+	count(rm.mark)=0 and
+	count(r.change)>0
 SQL
 	}
 	elsif ( $o->{changes} ) {
@@ -2239,7 +2299,8 @@ SQL
 SQL
 		$having = <<SQL;
 having
-	count(cm.mark)=0
+	count(cm.mark)=0 and
+	count(c.change)>0
 SQL
 	}
 	elsif ( $o->{branches} ) {
@@ -2268,7 +2329,8 @@ SQL
 SQL
 		$having = <<SQL;
 having
-	count(cm.mark)=0
+	count(cm.mark)=0 and
+	count(c.change)>0
 SQL
 	}
 
@@ -2310,6 +2372,7 @@ sub parse_export_opts {
 		getopt("n=i" => \$export_opts{chunk_size},
 		       "depth=i" => \$export_opts{depth},
 		       "l|long" => \$export_opts{long},
+		       "recalc" => \$export_opts{derive_again},
 		      );
 		@_ = @ARGV;
 	}
@@ -2355,7 +2418,7 @@ sub gfi_open {
 	my $eo = shift;
 	$MARKS_FILE ||= "p4raw.$$.marks";
 	if ( -t STDOUT ) {
-		open GFI, "|git fast-import "
+		open GFI, "|git fast-import --quiet "
 			.($eo->{gfi_options}||"")
 			.($eo->{depth}?"--depth=$eo->{depth} ":"")
 			."--export-marks=$MARKS_FILE"
@@ -2777,6 +2840,7 @@ sub do_find_branches {
 		$dbh->begin_work;
 		change_stats($dbh, $change,
 			     { compact => !$export_opts{long},
+			       derive_again => $export_opts{derive_again},
 			     },
 			    );
 		print "\n";
@@ -2865,6 +2929,13 @@ SQL
 			}
 		}
 		whisper "parents of $item are: @parents" if $VERBOSE > 1;
+		if ( 0 and (grep { $start{$_} } @parents) >= (@start - 1) ) {
+			# *THIS* is a merge base
+			$bases{$item}++;
+			for ( @parents ) {
+				$stale{$_}++;
+			}
+		}
 
 		my @parent_of;
 		for my $tip ( @start ) {
@@ -2938,7 +3009,6 @@ sub do_merge_base {
 
 sub do_is_parent {
 	my $dbh = shift;
-	
 }
 
 	# 5. finally, we have rev_blob rows for all of the files
@@ -2953,13 +3023,14 @@ sub export_commit_chunk {
 	my $dbh = shift;
 	my $o = shift;
 
-	$dbh->begin_work();
+	$dbh->begin_work() unless $dbh->ping == 3;
 
 	# first, get a plan of branches to export
 	my $commit_dag = row_iter($dbh, $o->{min}, $o->{max}, <<SQL);
 select
 	cb.branchpath,
 	cb.change,
+	cm2.mark as already,
 	cp.parent_branchpath,
 	cp.parent_change,
 	cm.mark,
@@ -2969,6 +3040,8 @@ select
 	cp.json_info
 from
 	change_branches cb
+	left join change_marks cm2
+		using (branchpath, change)
 	left join change_parents cp
 		on ( (cb.branchpath = cp.branchpath and
 			cb.change = cp.change) and
@@ -2982,7 +3055,7 @@ from
 		on (cp.parent_branchpath = cm.branchpath and
 			cp.parent_change = cm.change)
 	left join marks m
-		using (mark)
+		on (m.mark = cm.mark)
 where
 	cb.change between ? and ?
 order by
@@ -2996,7 +3069,7 @@ SQL
 select
 	cb.change,
 	cb.branchpath,
-	substr(rev.depotpath, length(cb.branchpath)) as relpath,
+	substr(rev.depotpath, length(cb.branchpath)+2) as relpath,
 	ct.title as change_type,
 	file_type,
 	mark,
@@ -3067,7 +3140,7 @@ SQL
 
 	say "exporting commits between $o->{min} and $o->{max}";
 	my ($tpb, $next_update);
-	if ( $o->{verbose} >= 0 ) {
+	if ( $o->{verbose} == 0 ) {
 		$tpb  = eval { Term::ProgressBar->new
 				({ count => $o->{chunk_size},
 				   ETA => "linear",
@@ -3079,6 +3152,10 @@ SQL
 		my $change = $change_br->{change};
 		my $bp = $change_br->{branchpath};
 		my $ref = _path2ref($bp);
+		if ( $change_br->{already} ) {
+			mutter "skipping $bp\@$change - already marked";
+			next;
+		}
 		mutter "exporting $bp\@$change to $ref";
 
 		my @parents = $change_br;
@@ -3161,6 +3238,12 @@ SQL
 			else {
 				my $ft = $rev->{file_type};
 				my $mode = _p4_type_to_mode($ft);
+				if ( !$rev->{blobid} and
+				     !$rev->{mark} ) {
+					say "error: no mark/blob for $rev->{branchpath}\@$rev->{change}:$rev->{relpath}";
+					say "Aborting change export.";
+					last change;
+				}
 				my $dataref = $rev->{blobid} ||
 					":".$rev->{mark};
 				my $relpath =$rev->{relpath};
@@ -3196,6 +3279,9 @@ sub make_commit {
 			  $desc->{change_time}." +0000" ];
 
 	my $description = $desc->{description};
+
+	# some perl-specific conventions
+	my @authors;
 
 	my $branchpath = $parents[0]{branchpath};
 	my $change = $parents[0]{change};
@@ -3294,6 +3380,23 @@ sub do_export_commits {
 	export_commit_chunk($dbh, \%export_opts);
 }
 
+sub do_unexport_commits {
+	my $dbh = shift;
+
+	my %export_opts = parse_export_opts($dbh, "commits", @_);
+
+	say "deleting commit records for $export_opts{chunk_size} changes";
+	$dbh->do("delete from change_marks where change between ? and ?",
+		 undef,
+		 $export_opts{min},
+		 $export_opts{max});
+	my $branches = change_branches_iter($dbh, $export_opts{min}-1, "max");
+	while ( my $br = $branches->() ) {
+		my $ref = _path2ref($br->{branchpath});
+		
+	}
+}
+
 sub do_export {
 	my $dbh = shift;
 
@@ -3303,6 +3406,15 @@ sub do_export {
 
 	$export_opts{no_checkpoint} = 1;
 	export_blob_chunk($dbh, \%export_opts);
+
+	for my $change ( $export_opts{min} .. $export_opts{max} ) {
+		change_stats($dbh, $change,
+			     { compact => !$export_opts{long},
+			     },
+			    );
+		print "\n";
+	}
+
 	delete $export_opts{no_checkpoint};
 	export_commit_chunk($dbh, \%export_opts);
 
@@ -3312,9 +3424,62 @@ our $PREFIX = $ENV{GIT_P4RAW_PREFIX} || "p4";
 
 sub _path2ref {
         my $branchpath = shift;
-        $branchpath =~ s{^//}{$PREFIX/};
+        $branchpath =~ s{^//(?:depot/)?}{$PREFIX/};
         #$branchpath =~ s{/}{/}g;
         "refs/heads/$branchpath";
+}
+
+sub do_dump {
+	my $dbh = shift;
+
+	my $journal;
+	for ( my $i = 1;
+	      -e ($journal = "p4raw-journal-$i.asv.gz");
+	      $i++ ) { }
+
+	say "creating new journal file $journal";
+	open JOURNAL, "|-", "gzip > $journal";
+	my $total;
+	for my $table ( qw( change_branches marks rev_marks
+			    change_marks change_parents ) ) {
+
+		$dbh->begin_work;
+		my $is_cp = $table eq "change_parents";
+		my $sth = $dbh->prepare(<<SQL.($is_cp?<<SQL:""));
+select * from $table
+where source_file = 'new'
+SQL
+and (manual or (not manual and
+     not exists (select true from change_parents cp2
+	         where cp2.change = change_parents.change
+		   and cp2.manual)))
+SQL
+		mutter "dumping $table";
+		$sth->execute;
+		my $c = 0;
+		while ( my @data = $sth->fetchrow_array ) {
+			$c++;
+			$total++;
+			pop @data;
+			print JOURNAL _to_p4_journal_format $table,
+				@data;
+		}
+		mutter "mutter updating $table";
+		$dbh->do(<<SQL);
+update $table
+set source_file = '$journal'
+where source_file = 'new'
+SQL
+		mutter "commit";
+		$dbh->commit;
+		say "dumped $c rows from $table";
+	}
+	close JOURNAL;
+	if ( !$total ) {
+		say "removing $journal - no content";
+		unlink($journal);
+	}
+
 }
 
 #=====================================================================
@@ -3356,6 +3521,7 @@ git-p4raw - git fast-import exporter for RAW perforce repositories
  git-p4raw find-branches            # detect branches
  git-p4raw graft CHANGE commit-ish  # configure manual reparenting
  git-p4raw export                   # detect branches
+ git-p4raw dump                     # save information for others
 
  # query commands:
  git-p4raw { find-change N | describe N | integrated DEPOTPATH
@@ -3424,12 +3590,20 @@ repository.
 C<drop> can be used to drop all database tables and destroy the git
 repository, in a somewhat molly-guarded fashion.
 
-=item C<git-p4raw load [filename...]>
+=item C<git-p4raw load [-r] [-f] [filename...]>
 
 The second command, C<load>, loads all of the Perforce data from the
 C<checkpoint.NNN.gz> and C<journal> files which it expects to find in
 the current directory (the root of the Perforce import).  You can
 optionally specify which files to load from.
+
+If you specify the C<-r> option, then the load will happen to
+temporary tables first, with new data merged in at the end using
+joins.  The merge rule is oldest-wins.  Without this option, the data
+is blindly inserted.
+
+If you specify C<-f>, then the normal logic that tries to prevent
+datafiles from being loaded twice is skipped.
 
 =item C<git-p4raw check>
 
@@ -3757,3 +3931,149 @@ like cherry picking).
 #   cperl-merge-trailing-else: nil
 #   cperl-continued-statement-offset: 8
 # End:
+
+=head1 OTHER FIX-UPS
+
+=head2 Correcting branch decisions
+
+If the decision made by C<describe> is awfully wrong, consider
+inserting some rows manually.
+
+  maia:~/src/p4-rsync$ git-p4raw describe 3736
+  Change 3736 by jhi@alpha on 1999/07/26 01:10:03
+  
+          Populate metaconfig branch.
+  
+  git-p4raw: warning: ignoring changes on path //depot/metaconfig/U/ebcdic@3736
+  git-p4raw: warning: ignoring changes on path //depot/metaconfig/U/a_dvisory@3736
+  git-p4raw: warning: ignoring changes on path //depot/metaconfig/U/acl@3736
+  git-p4raw: warning: ignoring changes on path //depot/metaconfig/U/compline@3736
+  On path //depot/metaconfig/U,
+          add 353 file(s)
+  
+  On path //depot/metaconfig/U.check,
+          add 7 file(s)
+  
+  On path //depot/metaconfig/dist-3.0at70,
+          add 576 file(s)
+  
+  On path //depot/metaconfig/dist-3.0at70b,
+          add 633 file(s)
+  
+  maia:~/src/p4-rsync$ psql
+  Welcome to psql 8.2.4, the PostgreSQL interactive terminal.
+  
+  Type:  \copyright for distribution terms
+         \h for help with SQL commands
+         \? for help with psql commands
+         \g or terminate with semicolon to execute query
+         \q to quit
+  
+  pumpkin=# delete from change_parents
+            where parent_branchpath like '//depot/metaconfig/%';
+  DELETE 690 0
+  pumpkin=# delete from change_branches
+            where branchpath like '//depot/metaconfig/%';
+  DELETE 694 0
+  pumpkin=# delete from change_branches where change = 3736;
+  DELETE 4
+  pumpkin=# insert into change_branches (branchpath, change)
+     values ('//depot/metaconfig', 3736);
+  INSERT 0 1
+  pumpkin=# \q
+  maia:~/src/p4-rsync$ git-p4raw describe 3736 -w
+  Change 3736 by jhi@alpha on 1999/07/26 01:10:03
+  
+          Populate metaconfig branch.
+  
+  On path //depot/metaconfig,
+          add 1569 file(s)
+  
+  maia:~/src/p4-rsync$ 
+
+=head2 Replacing Perforce changes with previously crafted ones
+
+An alternative to grafting is to replace commits entirely.  To do
+this, insert into the change_marks and marks tables.
+
+  begin transaction;
+  insert into change_marks (branchpath, change, mark)
+  values ('//depot/blah', 1234, nextval('gfi_mark'));
+  insert into marks (mark, commitid)
+  values (currval('gfi_mark'),
+  '1234567890123456789012345678901234567890');
+  commit;
+
+This is useful for grafting the first change on from any pre-perforce
+archaeological remains that your project might have.
+
+=head2 Grafting
+
+ insert into change_parents (change,branchpath,ref)
+ values (1,'//depot/perl','perl-5.003');
+
+Etc.
+
+An example interactive session:
+
+  maia:~/src/p4-rsync$ git-p4raw describe 17
+  Change 17 by mbeattie@localhost on 1997/05/25 06:46:49
+  
+          Wholesale update to 5.004.
+  
+  On path //depot/relperl,
+          add 291 file(s)
+          delete 27 file(s)
+          edit 392 file(s)
+  
+  Parent: //depot/relperl@16
+  maia:~/src/p4-rsync$ psql
+  Welcome to psql 8.2.4, the PostgreSQL interactive terminal.
+  
+  Type:  \copyright for distribution terms
+         \h for help with SQL commands
+         \? for help with psql commands
+         \g or terminate with semicolon to execute query
+         \q to quit
+  
+  pumpkin=# insert into change_parents (change,branchpath,ref) values (17,'//depot/relperl','perl-5.004');
+  INSERT 0 1
+  pumpkin=# insert into change_parents (change,branchpath,parent_branchpath,parent_change) values (17,'//depot/relperl','//depot/relperl',16);
+  INSERT 0 1
+  pumpkin=# \q
+  maia:~/src/p4-rsync$ git-p4raw describe 17
+  Change 17 by mbeattie@localhost on 1997/05/25 06:46:49
+  
+          Wholesale update to 5.004.
+  
+  On path //depot/relperl,
+          add 291 file(s)
+          delete 27 file(s)
+          edit 392 file(s)
+  
+  Parent: //depot/relperl@16 (manual)
+  Parent: perl-5.004
+  maia:~/src/p4-rsync$ git-p4raw export-commits -v 2..17
+  git-p4raw: gathering export plan
+  git-p4raw: exporting commits between 2 and 17
+  git-p4raw: exporting //depot/perl@2 to refs/heads/p4/depot/perl
+  git-p4raw: exporting //depot/thrperl@3 to refs/heads/p4/depot/thrperl
+  git-p4raw: exporting //depot/thrperl@4 to refs/heads/p4/depot/thrperl
+  git-p4raw: exporting //depot/thrperl@5 to refs/heads/p4/depot/thrperl
+  git-p4raw: exporting //depot/perlext/Thread@6 to refs/heads/p4/depot/perlext/Thread
+  git-p4raw: exporting //depot/perlext/Thread@7 to refs/heads/p4/depot/perlext/Thread
+  git-p4raw: exporting //depot/thrperl@8 to refs/heads/p4/depot/thrperl
+  git-p4raw: exporting //depot/thrperl@9 to refs/heads/p4/depot/thrperl
+  git-p4raw: exporting //depot/perlext/Compiler@10 to refs/heads/p4/depot/perlext/Compiler
+  git-p4raw: exporting //depot/perlext/Compiler@11 to refs/heads/p4/depot/perlext/Compiler
+  git-p4raw: exporting //depot/perlext/Compiler@12 to refs/heads/p4/depot/perlext/Compiler
+  git-p4raw: exporting //depot/perlext/Compiler@13 to refs/heads/p4/depot/perlext/Compiler
+  git-p4raw: exporting //depot/perlext/Compiler@14 to refs/heads/p4/depot/perlext/Compiler
+  git-p4raw: exporting //depot/relperl@16 to refs/heads/p4/depot/relperl
+  git-p4raw: exporting //depot/relperl@17 to refs/heads/p4/depot/relperl
+  git-p4raw: 1 extra merge parents
+  git-p4raw: Now checkpointing.
+  git-p4raw: waited 1s for p4raw.21152.marks to be created
+  git-p4raw: wrote 16 marks to DB
+
+=cut

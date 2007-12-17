@@ -9,6 +9,10 @@ alter table revcx add constraint revcx_change_valid
 alter table change_branches add constraint change_branches_change_valid
       foreign key (change) references change;
 
+-- p4users primary key
+alter table p4user
+      add primary key (who_user);
+
 -- checking all change description references are unique
 create unique index change_desc_idx on change(change_desc_id);
 
