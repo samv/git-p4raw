@@ -3496,7 +3496,7 @@ SQL
 		while ( my @data = $sth->fetchrow_array ) {
 			$c++;
 			$total++;
-			pop @data;
+			shift @data;
 			print JOURNAL _to_p4_journal_format $table,
 				@data;
 		}
