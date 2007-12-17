@@ -148,6 +148,8 @@ SQL
 	say "Remaining files: @files";
 	no_filter:
 
+	my $marks_dirty;
+
 	my %sth;
 	while ( my $filename = shift @files ) {
 		say "loading data from $filename";
@@ -254,6 +256,9 @@ SQL
 				barf "DBI error ($@); Data: ".Dumper(\@columns);
 			}
 			$count{$db}++;
+			if ( $db eq "marks" ) {
+				$marks_dirty++;
+			}
 			if ( $dirty > (1<<18) or $dirty_rows >= 5000 ) {
 				say "commit after $rows rows: ".
 					join("; ", map{"$count{$_} x $_"}
@@ -328,8 +333,19 @@ $from_where
 SQL
 			mutter "with: ", $sql;
 			$dbh->do($sql);
+			if ( $table eq "marks" ) {
+				$marks_dirty++;
+			}
 		}
 		$dbh->commit;
+	}
+	if ( $marks_dirty ) {
+		my ($top) = values%{row_iter($dbh,<<SQL)->()};
+select max(mark)+1 from marks
+SQL
+		say "resetting gfi_mark to $top";
+		$dbh->do("alter sequence gfi_mark "
+			 ."restart with $top");
 	}
 }
 
