@@ -102,6 +102,9 @@ sub do_load {
 	}
 
 	goto no_filter if $load_opts{force};
+
+	#FIXME: this logic is naff.  The journal of the same number
+	#must be imported as well.  Import with -f
 	my $already_got = row_iter($dbh, <<'SQL')->();
 select
 	max(regexp_replace(source_file, E'.*\\.([0-9]*)\\.gz.*', E'\\1'))
@@ -3637,6 +3640,13 @@ is blindly inserted.
 
 If you specify C<-f>, then the normal logic that tries to prevent
 datafiles from being loaded twice is skipped.
+
+B<ERRATA>: currently you will need to manually load the FIRST journal
+with:
+
+  git-p4raw load -r -f journal.123.gz
+
+Where 123 is the highest number checkpoint you have.
 
 =item C<git-p4raw check>
 
