@@ -269,9 +269,24 @@ SQL
 	}
 
 	if ( $load_opts{reload} ) {
-		my @tables = keys
-			%{{ map { $_ => 1 } map { m{(.*)\0} }
-				    keys %sth }};
+		my %tables = map { $_ => 1 } map { m{(.*)\0} }
+				    keys %sth;
+		my @tables;
+		for my $table ( qw( user
+				    change change_desc
+				    rev revcx
+				    integed
+				    marks
+				    rev_marks
+				    change_branches
+				    change_parents
+				    change_marks
+				 ) ) {
+			if ( $tables{$table} ) {
+				push @tables, $table;
+			}
+		}
+		say "Loading tables in this order: @tables";
 		# Oh, whither MERGE INTO :)
 		$dbh->begin_work;
 		for my $table ( @tables ) {
@@ -289,18 +304,24 @@ SQL
 					next;
 				};
 			(my $first_key = $keys) =~ s{,.*}{};
-			say "merging ${table}_new into $table";
-			my $sql = <<SQL;
-insert into
-	"$table"
-select
-	tn.*
+			my $from_where = <<SQL;
 from
 	"${table}_new" tn
  	left join "$table" ttotheo
 		using ($keys)
 where
 	ttotheo.$first_key is null
+SQL
+			my $sql = "select count(*) ".$from_where;
+			mutter "counting new rows:";
+			my ($num) = values%{row_iter($dbh, $sql)->()};
+			say "merging $num rows from ${table}_new into $table";
+			$sql = <<SQL;
+insert into
+	"$table"
+select
+	tn.*
+$from_where
 SQL
 			mutter "with: ", $sql;
 			$dbh->do($sql);
