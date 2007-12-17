@@ -1338,7 +1338,9 @@ SQL
 				       + $num_length
 				       - length($branches{$branch}[0]) + 1)),
 			($branches{$branch}[0], " ",
-			 substr($branches{$branch}[1], 0, 12),
+			 ($branches{$branch}[1]
+			  ? substr($branches{$branch}[1], 0, 12)
+			  : "-"),
 			 "\n");
 	}
 }
@@ -2020,11 +2022,16 @@ select
 	ct.title as change_title,
 	file_type,
 	rcs_file,
-	rcs_revision
+	rcs_revision,
+	m.blobid
 from
 	rev
 	inner join change_type ct
 		on (ct.change_type = rev.rev_change_type)
+	left join rev_marks rm
+		using(depotpath,revision)
+	left join marks m
+		using (mark)
 where
 	$where
 order by
@@ -2038,7 +2045,12 @@ SQL
 			print "$depotpath#$row->{revision} - "
 				.("$row->{change_title} change "
 				  .$row->{change}." ("._p4_type($row->{file_type})
-				  .")\n");
+				  .")".($row->{blobid}
+					?" blob ".substr($row->{blobid},0,7)
+					:"")."\n");
+		}
+		if ( $row->{blobid} ) {
+			exec("git", "cat-file", "blob", $row->{blobid});
 		}
 		my $file_data = get_rcs($row->{rcs_file},
 					$row->{rcs_revision});
