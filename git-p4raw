@@ -2325,93 +2325,83 @@ sub index_diff {
 
 sub min_change {
 	my $dbh = shift;
-	my $o = shift;
+	my $type = shift;
+	no strict 'refs';
+	print $PROGNAME.": min_change($type) => " if $VERBOSE>0;
+	my $min_row = row_iter($dbh, &{"min_change_$type"})->();
+	if ( ! $min_row ) {
+		print "(undef)\n" if $VERBOSE>0;
+		return;
+	}
+	print $min_row->{change}, "\n" if $VERBOSE>0;
+	$min_row->{change};
+}
 
-	my $joins = "";
-	my $having = "";
-
-	if ( $o->{blobs} ) {
-		$joins = <<SQL;
-	left join rev r
-		on (r.change = c.change and
-			r.rev_change_type != 2)
+sub min_change_blobs {
+	<<SQL;
+select distinct on (r.change)
+	r.change
+from
+	revcx r
 	left join rev_marks rm
 		using (depotpath, revision)
+where
+	r.change_type != 2 and
+	rm.depotpath is null
+order by
+	r.change asc
+limit 1
 SQL
-		$having = <<SQL;
-having
-	count(rm.mark)=0 and
-	count(r.change)>0
-SQL
-	}
-	elsif ( $o->{changes} ) {
-		$joins = <<SQL;
-	left join change_marks cm
-		using (change)
-SQL
-		$having = <<SQL;
-having
-	count(cm.mark)=0 and
-	count(c.change)>0
-SQL
-	}
-	elsif ( $o->{branches} ) {
-		$joins = <<SQL;
-	left join change_branches cb
-		using (change)
-SQL
-		$having = <<SQL;
-having
-	count(cb.branchpath)=0
-SQL
-	}
-	elsif ( $o->{extant_branches} ) {
-		$joins = <<SQL;
-	join change_branches cb
-		using (change)
-SQL
-	}
-	elsif ( $o->{commits} ) {
-		$joins = <<SQL;
-	join change_branches cb
-		on (cb.change = c.change)
-	left join change_marks cm
-		on (cb.branchpath = cm.branchpath and
-			cb.change = cm.change)
-SQL
-		$having = <<SQL;
-having
-	count(cm.mark)=0 and
-	count(c.change)>0
-SQL
-	}
+}
 
-	my $sql = <<SQL;
-select
+sub min_change_commits {
+	<<SQL;
+select distinct on (cb.change)
+	cb.change
+from
+	change c
+	join change_branches cb
+		using (change)
+	left join change_marks cm
+		using (branchpath, change)
+where
+	cm.branchpath is null and
+	c.closed != 0
+order by
+	cb.change asc
+limit 1
+SQL
+}
+
+sub min_change_branches {
+	<<SQL;
+select distinct on (c.change)
 	c.change
 from
 	change c
-${joins}
+	left join change_branches cb
+		using (change)
 where
-	closed = 1
-group by
-	c.change
-${having}
+	cb.change is null and
+	c.closed != 0
 order by
 	c.change asc
 limit 1
 SQL
+}
 
-	mutter "finding first change with new "
-		.($o->{blobs}?"blobs":"commits");
-	my $change_sth = $dbh->prepare($sql);
-	$change_sth->execute;
-	my $min_change;
-	$change_sth->bind_col(1, \$min_change);
-	$change_sth->fetch;
-	$change_sth->finish;
-
-	return $min_change;
+sub min_change_extant_branches {
+	<<SQL;
+select distinct on (c.change)
+	c.change
+from
+	change c
+	join change_branches cb
+		using (change)
+order by
+	c.change asc
+limit 1
+SQL
 }
 
 sub parse_export_opts {
@@ -2436,7 +2426,8 @@ sub parse_export_opts {
 		@export_opts{qw(min max)} = ($1, $2);
 	}
 	if ( !$export_opts{min} ) {
-		$export_opts{min} = min_change($dbh, { $type => 1 });
+		$export_opts{min} = min_change($dbh, $type)
+			or abort "min_change($type) returns undef - aborting!";
 	}
 	if ( $export_opts{min} and $export_opts{chunk_size} ) {
 		$export_opts{max} = $export_opts{min}
@@ -3635,6 +3626,7 @@ $dbh->{RaiseError}=1;
 $dbh->{PrintError}=1;
 $dbh->{AutoCommit}=1;
 
+$| = 1;
 &{"do_$action"}($dbh, @ARGV);
 
 __END__
