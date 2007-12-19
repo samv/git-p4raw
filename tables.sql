@@ -204,3 +204,62 @@ create table change_parents (
 	-- zomg no .. he's not going to put JSON in there is he?
 	json_info TEXT
 );
+
+-- TODO create language 'plperl';
+
+-- this is a memoization that will be important.
+-- TODOcreate table merge_bases (	
+-- TODO	left_branch TEXT not null,
+-- TODO	left_change int not null,
+-- TODO	foreign key (branchpath, change)
+-- TODO		references change_branches (branchpath,change)
+-- TODO		on delete cascade,
+-- TODO	
+-- TODO	right_branch TEXT not null,
+-- TODO	right_change int not null,
+-- TODO	foreign key (branchpath, change)
+-- TODO		references change_branches (branchpath,change)
+-- TODO		on delete cascade,
+-- TODO	
+-- TODO	base_branch TEXT not null,
+-- TODO	base_change int not null,
+-- TODO	foreign key (branchpath, change)
+-- TODO		references change_branches (branchpath,change)
+-- TODO		on delete cascade,
+-- TODO
+-- TODO	CHECK (
+-- TODO		CASE WHEN
+-- TODO			(left_change = right_change)
+-- TODO		THEN 
+-- TODO			(left_branch < right_branch)
+-- TODO		ELSE
+-- TODO			(left_change < right_change)
+-- TODO		END
+-- TODO	),
+-- TODO	CHECK (
+-- TODO		base_change <= right_change or
+-- TODO		base_change <= left_change
+-- TODO	)
+-- TODO);
+-- TODO
+-- TODOcreate function find_merge_base(text, int, text, int) returns bool AS $$
+-- TODO	my ($left_bp, $left_chg, $right_bp, $right_chg) = @_;
+-- TODO
+-- TODO	my $sth = spi_prepare
+-- TODO		("select * from change_parents where "
+-- TODO       		."branchpath = ? and change = ? order by manual desc");
+-- TODO	
+-- TODO	my @start = map { join '@', @$_ }
+-- TODO		[$left_bp,$left_chg], [$right_bp, $right_chg];
+-- TODO
+-- TODO$$ language 'plperl';
+-- TODO
+-- TODOcreate function find_merge_branch(text, int, text, int) returns text AS $$
+-- TODO
+-- TODO
+-- TODO$$ language 'plperl';
+-- TODO
+-- TODOcreate function find_merge_branch(text, int, text, int) returns text AS $$
+-- TODO
+-- TODO
+-- TODO$$ language 'plperl';

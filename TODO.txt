@@ -7,6 +7,15 @@
    to regenerate the merge conflict is the merge base, so I'll do away
    with that horrid beast first.
 
+   so, the sub-TODO list for this is:
+
+	- drop the json_info bits
+	- create a table for merge_bases
+	- create a function to find them for two changes (use PL/Perl?)
+	- create a function to show the result of a three-way merge
+	- create a function to compare the results of that with a
+	  particular change
+
  - there are several queries which I wrote before I discovered SELECT
    DISTINCT ON (column, column) that should be rewritten (I discovered
    this perhaps a few days ago!).  In particular the views, defined in
