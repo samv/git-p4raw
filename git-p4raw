@@ -79,6 +79,22 @@ sub do_drop {
 	}
 }
 
+my %prebuilt_merge =
+	('change_parents' => <<SQL,
+from
+        change_parents_new tn
+        left join change_parents t2
+                on (tn.branchpath = t2.branchpath and
+			tn.change = t2.change and
+			(tn.ref = t2.ref) or
+			(tn.parent_branchpath = t2.parent_branchpath and
+			 tn.parent_change = t2.parent_change)
+		)
+where
+        t2.branchpath is null
+SQL
+	);
+
 sub do_load {
 	my $dbh = shift;
 
@@ -318,11 +334,15 @@ SQL
 		for my $table ( @tables ) {
 			my $sth = $dbh->primary_key_info
 				('', '', $table, {pg_onerow => 1});
+			my $from_where;
 			if ( !$sth ) {
-				moan "failed to get primary key info for "
-					.$table;
-				next;
+				$from_where = $prebuilt_merge{$table}
+					or do {
+					moan "don't know how to merge $table";
+					next;
+				};
 			}
+			else {
 			my $keys = $sth->fetchall_arrayref->[0][3]
 				or do {
 					moan "$table has no primary key!";
@@ -338,6 +358,7 @@ from
 where
 	ttotheo.$first_key is null
 SQL
+			}
 			my $sql = "select count(*) ".$from_where;
 			mutter "counting new rows:";
 			my ($num) = values%{row_iter($dbh, $sql)->()};
