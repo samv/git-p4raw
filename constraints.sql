@@ -30,6 +30,8 @@ alter table rev_marks add constraint rev_marks_depot_rev_valid
 alter table change_marks add constraint change_marks_branch_valid
       foreign key (branchpath,change) references change_branches;
 
+create unique index change_parents_unique on change_parents
+	(branchpath,change,parent_branchpath,parent_change,ref);
 alter table change_parents add constraint change_branchpath_valid
       foreign key (branchpath,change)
       references change_branches;

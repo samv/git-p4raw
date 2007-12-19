@@ -184,7 +184,6 @@ create table change_parents (
 
 	parent_branchpath TEXT null,
 	parent_change int null,
-	primary key (branchpath, change, parent_branchpath, parent_change),
 
 	ref TEXT null,
 	manual boolean NOT NULL default true,
