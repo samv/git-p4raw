@@ -26,3 +26,20 @@
    author information and change the Author field of the commit.  This
    is not a TODO for the general tool; people may just customise the
    make_commit() function for their site.
+
+ - I used this command to 'recover' my change_marks / marks table:
+
+git-log utsl/p4/lexwarn/perl utsl/p4/mainline/perl utsl/p4/maint-5.004/perl utsl/p4/oneperl utsl/p4/perl utsl/p4/perlext/Compiler utsl/p4/perlext/Thread utsl/p4/relperl utsl/p4/thrperl utsl/p4/win32/perl ^perl-5.003 ^perl-5.004_04 | perl -nle 'BEGIN{$i=176386;}m{^commit (.*)} && ($commit=$1); m{p4raw-id: (.*)@(\d+)} && do{ ++$i; print "\@pv\@ 3 \@db.marks\@ $i \@$commit@\n\@pv\@ 3 \@db.change_marks\@ \@$1\@ $2 $i"}' > ../p4raw-extra-published-1.asv
+
+   there should be a command to drop all the change marks we know about and then 
+
+ - unexport-commits doesn't rewind the p4/* head pointers.  You
+   currently have to blow them all away and pipe the output of
+   'git-p4raw show-branches N' to figure out which refs to write;
+
+   rm -r .git/refs/heads/p4
+   git-p4raw show-branches 138 | sed 's!//depot!refs/heads/p4!' | while read ref x commit; do git-update-ref $ref $commit; done
+
+ - there should be an "info" command which summarises what has been
+   imported and converted so far.
+
