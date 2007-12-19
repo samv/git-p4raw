@@ -98,7 +98,7 @@ sub do_load {
 	else {
 		@files = grep { -f }
 			(<journal checkpoint journal.*.gz checkpoint.*.gz>,
-			 <p4raw-extra-*.asv>);
+			 <p4raw-extra-*.asv p4raw-journal-*.asv.gz>);
 	}
 
 	goto no_filter if $load_opts{force};
