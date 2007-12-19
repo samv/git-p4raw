@@ -115,7 +115,7 @@ SQL
 	while (my $got = $already_got->()) {
 		my $file = $got->{source_file};
 		$got{$file}++;
-		if (m{(checkpoint|journal).(\d+).gz}) {
+		if ($file =~ m{(checkpoint|journal).(\d+).gz}) {
 			$max_journal = $2 if $1 eq "journal";
 			$max_checkpoint = $2 if $1 eq "checkpoint";
 		}
