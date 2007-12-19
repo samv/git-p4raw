@@ -147,6 +147,11 @@ SQL
 				mutter "excluding $_ - not interesting";
 				0;
 			}
+			elsif ( $_ ne "journal" and
+				$got{$_} ) {
+				moan "excluding $_ - already got";
+				0;
+			}
 			else {
 				1;
 			}
