@@ -125,7 +125,7 @@ SQL
 	my $top_checkpoint;
 	my $top_journal;
 	for my $file (@files) {
-		if (m{(checkpoint|journal).(\d+).gz}) {
+		if ($file =~ m{(checkpoint|journal).(\d+).gz}) {
 			$top_journal = $2 if $1 eq "journal";
                         $top_checkpoint = $2 if $1 eq "checkpoint";
 		}
@@ -136,7 +136,7 @@ SQL
 		@files = grep {
 			if (m{checkpoint.(\d+).gz} and
 				($max_journal or $max_checkpoint) or
-				($max_checkpoint > $1)) {
+				($max_checkpoint and $max_checkpoint > $1)) {
 				mutter "excluding $_ - not interesting";
 				();
 			}
@@ -156,6 +156,12 @@ SQL
 				1;
 			}
 		} @files;
+		@files = sort { ($b=~m{^checkpoint.\d+.gz}) <=> ($a=~m{^checkpoint.\d+.gz}) or
+				($b=~m{^journal.\d+.gz}) <=> ($a=~m{^journal.\d+.gz}) or do {
+					my $a_r = $a =~ m{(\d+)};
+					my $b_r = $b =~ m{(\d+)};
+					$a_r && $b_r && ($a_r <=> $b_r);
+				} or $a cmp $b } @files;
 	}
 	say "Remaining files: @files";
 	no_filter:
