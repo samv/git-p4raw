@@ -2469,7 +2469,10 @@ sub parse_export_opts {
 	}
 	if ( !$export_opts{min} ) {
 		$export_opts{min} = min_change($dbh, $type)
-			or abort "min_change($type) returns undef - aborting!";
+			or do {
+			say "min_change($type) returns undef - apparently nothing to do!";
+			exit 0;
+		};
 	}
 	if ( $export_opts{min} and $export_opts{chunk_size} ) {
 		$export_opts{max} = $export_opts{min}
