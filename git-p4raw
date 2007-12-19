@@ -103,44 +103,51 @@ sub do_load {
 
 	goto no_filter if $load_opts{force};
 
-	#FIXME: this logic is naff.  The journal of the same number
-	#must be imported as well.  Import with -f
 	my $already_got = row_iter($dbh, <<'SQL')->();
-select
-	max(regexp_replace(source_file, E'.*\\.([0-9]*)\\.gz.*', E'\\1'))
-from
-	(select distinct
+select distinct
 		source_file
 	from
 		change
-	where
-		source_file ~ '(journal|checkpoint).[0-9]*.gz') as x
 SQL
-	# don't load any checkpoints or journals earlier than
-	# the last labelled file we read
-	my $min_interesting = ($already_got->{max}||-1) + 1;
-	my $min_checkpoint = max
-		((map {
-			m{checkpoint.(\d+).gz} ? $1 : 0
-		} @files),
-		 $min_interesting-1);
-	mutter "min interesting: $min_interesting";
-	mutter "min checkpoint:  $min_checkpoint";
-	$min_interesting = $min_checkpoint
-		unless $min_interesting >= $min_checkpoint;
+	my %got;
+	my $max_checkpoint;
+	my $max_journal;
+	while (my $got = $already_got->()) {
+		my $file = $got->{source_file};
+		$got{$file}++;
+		if (m{(checkpoint|journal).(\d+).gz}) {
+			$max_journal = $2 if $1 eq "journal";
+			$max_checkpoint = $2 if $1 eq "checkpoint";
+		}
+	}
 
-	if ( $min_checkpoint ) {
+	# we shouldn't load more than the latest checkpoint - find the top one(s)
+	my $top_checkpoint;
+	my $top_journal;
+	for my $file (@files) {
+		if (m{(checkpoint|journal).(\d+).gz}) {
+			$top_journal = $2 if $1 eq "journal";
+                        $top_checkpoint = $2 if $1 eq "checkpoint";
+		}
+	}
+
+	if ( $max_journal or $max_checkpoint or $top_checkpoint ) {
+		# we might need to exclude some files.  check.
 		@files = grep {
-			if ( ( m{(checkpoint|journal).(\d+).gz}
-			       and $2 < $min_interesting ) ) {
-				mutter "ignoring $_ - not interesting";
+			if (m{checkpoint.(\d+).gz} and
+				($max_journal or $max_checkpoint) or
+				($max_checkpoint > $1)) {
+				mutter "excluding $_ - not interesting";
+				();
+			}
+			elsif ( m{journal.(\d+).gz} and
+				($max_checkpoint && $max_checkpoint > $1 
+				or $max_journal && $max_journal >= $1
+				or $top_checkpoint && $top_checkpoint > $1) ) {
+				mutter "excluding $_ - not interesting";
 				0;
 			}
-			elsif ( ( m{journal.(\d+).gz}
-				  and $1 <= $min_checkpoint ) ) {
-				mutter "ignoring $_ - using checkpoint";
-				0;
-			} else {
+			else {
 				1;
 			}
 		} @files;
