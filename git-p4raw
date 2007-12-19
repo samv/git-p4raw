@@ -103,7 +103,7 @@ sub do_load {
 
 	goto no_filter if $load_opts{force};
 
-	my $already_got = row_iter($dbh, <<'SQL')->();
+	my $already_got = row_iter($dbh, <<'SQL');
 select distinct
 		source_file
 	from
