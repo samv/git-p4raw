@@ -332,10 +332,11 @@ SQL
 		# Oh, whither MERGE INTO :)
 		$dbh->begin_work;
 		for my $table ( @tables ) {
-			my $sth = $dbh->primary_key_info
-				('', '', $table, {pg_onerow => 1});
+			my $pki = $dbh->primary_key_info
+				('', '', $table, {pg_onerow => 1})
+					->fetchall_arrayref;
 			my $from_where;
-			if ( !$sth ) {
+			if ( !$pki ) {
 				$from_where = $prebuilt_merge{$table}
 					or do {
 					moan "don't know how to merge $table";
@@ -343,7 +344,7 @@ SQL
 				};
 			}
 			else {
-			my $keys = $sth->fetchall_arrayref->[0][3]
+			my $keys = $pki->[3]
 				or do {
 					moan "$table has no primary key!";
 					moan "did NOT load ${table}_new in";
@@ -3763,17 +3764,11 @@ optionally specify which files to load from.
 If you specify the C<-r> option, then the load will happen to
 temporary tables first, with new data merged in at the end using
 joins.  The merge rule is oldest-wins.  Without this option, the data
-is blindly inserted.
+is blindly inserted.  You must have constraints applied (ie, have run
+C<git-p4raw check>) to do this.
 
 If you specify C<-f>, then the normal logic that tries to prevent
 datafiles from being loaded twice is skipped.
-
-B<ERRATA>: currently you will need to manually load the FIRST journal
-with:
-
-  git-p4raw load -r -f journal.123.gz
-
-Where 123 is the highest number checkpoint you have.
 
 =item C<git-p4raw check>
 
