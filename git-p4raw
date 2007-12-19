@@ -332,9 +332,9 @@ SQL
 		# Oh, whither MERGE INTO :)
 		$dbh->begin_work;
 		for my $table ( @tables ) {
-			my $pki = $dbh->primary_key_info
-				('', '', $table, {pg_onerow => 1})
-					->fetchall_arrayref;
+			my $sth = $dbh->primary_key_info
+				('', '', $table, {pg_onerow => 1});
+			my $pki = $sth && $sth->fetchall_arrayref;
 			my $from_where;
 			if ( !$pki ) {
 				$from_where = $prebuilt_merge{$table}
@@ -344,14 +344,14 @@ SQL
 				};
 			}
 			else {
-			my $keys = $pki->[3]
+			my $keys = $pki->[0][3]
 				or do {
 					moan "$table has no primary key!";
 					moan "did NOT load ${table}_new in";
 					next;
 				};
 			(my $first_key = $keys) =~ s{,.*}{};
-			my $from_where = <<SQL;
+			$from_where = <<SQL;
 from
 	"${table}_new" tn
  	left join "$table" ttotheo
