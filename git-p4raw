@@ -2368,7 +2368,9 @@ sub min_change {
 	my $type = shift;
 	no strict 'refs';
 	print $PROGNAME.": min_change($type) => " if $VERBOSE>0;
-	my $min_row = row_iter($dbh, &{"min_change_$type"})->();
+	my $sql = &{"min_change_$type"};
+	print $PROGNAME."\n$sql  => " if $VERBOSE>1;
+	my $min_row = row_iter($dbh, $sql)->();
 	if ( ! $min_row ) {
 		print "(undef)\n" if $VERBOSE>0;
 		return;
