@@ -3625,6 +3625,7 @@ my $dbh = DBI->connect("dbi:Pg:") or barf "DBI connect failed";
 $dbh->{RaiseError}=1;
 $dbh->{PrintError}=1;
 $dbh->{AutoCommit}=1;
+$dbh->{pg_enable_utf8}=1;
 
 $| = 1;
 &{"do_$action"}($dbh, @ARGV);
