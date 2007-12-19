@@ -115,7 +115,7 @@ SQL
 	while (my $got = $already_got->()) {
 		my $file = $got->{source_file};
 		$got{$file}++;
-		if ($file =~ m{(checkpoint|journal).(\d+).gz}) {
+		if ($file =~ m{^(checkpoint|journal).(\d+).gz}) {
 			$max_journal = $2 if $1 eq "journal";
 			$max_checkpoint = $2 if $1 eq "checkpoint";
 		}
@@ -125,7 +125,7 @@ SQL
 	my $top_checkpoint;
 	my $top_journal;
 	for my $file (@files) {
-		if ($file =~ m{(checkpoint|journal).(\d+).gz}) {
+		if ($file =~ m{^(checkpoint|journal).(\d+).gz}) {
 			$top_journal = $2 if $1 eq "journal";
                         $top_checkpoint = $2 if $1 eq "checkpoint";
 		}
@@ -134,13 +134,13 @@ SQL
 	if ( $max_journal or $max_checkpoint or $top_checkpoint ) {
 		# we might need to exclude some files.  check.
 		@files = grep {
-			if (m{checkpoint.(\d+).gz} and
-				($max_journal or $max_checkpoint) or
-				($max_checkpoint and $max_checkpoint > $1)) {
+			if (m{^checkpoint.(\d+).gz} and
+				(($max_journal or $max_checkpoint) or
+				($max_checkpoint and $max_checkpoint > $1))) {
 				mutter "excluding $_ - not interesting";
 				();
 			}
-			elsif ( m{journal.(\d+).gz} and
+			elsif ( m{^journal.(\d+).gz} and
 				($max_checkpoint && $max_checkpoint > $1 
 				or $max_journal && $max_journal >= $1
 				or $top_checkpoint && $top_checkpoint > $1) ) {
