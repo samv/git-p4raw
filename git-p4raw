@@ -2408,7 +2408,7 @@ sub min_change {
 	no strict 'refs';
 	print $PROGNAME.": min_change($type) => " if $VERBOSE>0;
 	my $sql = &{"min_change_$type"};
-	print $PROGNAME."\n$sql  => " if $VERBOSE>1;
+	print "\n$sql  => " if $VERBOSE>1;
 	my $min_row = row_iter($dbh, $sql)->();
 	if ( ! $min_row ) {
 		print "(undef)\n" if $VERBOSE>0;
@@ -3357,7 +3357,6 @@ SQL
 		}
 		if (@parents) {
 			mutter @parents." extra merge parents";
-			$DB::single = 1;
 			gfi_merge(map { $to_ref->($_) } @parents);
 		}
 
