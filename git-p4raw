@@ -950,35 +950,56 @@ sub do_describe {
 	$dbh->commit;
 }
 
+# this function is verging on ridiculous, implementing a tiny portion
+# of a DBIx::Class::ResultSet, badly.
 sub change_branches_iter {
 	my $dbh = shift;
 	my $change = shift;
 	my $what = shift;
 	my $o = shift;
-	my ($filter, $select, $group);
-	if ( $what eq "eq" ) {
-		$filter = "change = ?";
-		$select = "change";
-	}
-	elsif ( $what eq "max" ) {
-		$filter = "change <= ?";
-		$select = "max(change) as change";
-		$group = 1;
-	}
-	elsif ( $what eq "min" ) {
-		$filter = "change <= ?";
-		$select = "min(change) as change";
-		$group = 1;
-	}
+	my ($filter, $select, $group, $group_by, $order, $order_by);
 	my $join = "";
+	$select = "branchpath";
+	$group_by = "branchpath";
 	if ( $o->{commits} ) {
 		$join = "\tjoin change_marks using (branchpath,change)\n"
 			."\tjoin marks using (mark)\n";
-		$select .= ",\n\tcommitid";
+		$select .= ",\n\tchange,\n\tcommitid";
+		$select = "distinct on (branchpath) ".$select;
+		$order = 1;
+		$order_by = "branchpath";
+		if ( $what eq "eq" ) {
+			$filter = "change = ?";
+		}
+		elsif ( $what eq "max" ) {
+			$filter = "change <= ?";
+			$order_by .= ",\n\tchange desc";
+		}
+		elsif ( $what eq "min" ) {
+			$filter = "change <= ?";
+			$order = 1;
+			$order_by .= ",\n\tchange asc";
+		}
+		$group = 0;
 	}
-	my $sql = (<<SQL.($group?<<SQL:""));
+	else {
+		if ( $what eq "eq" ) {
+			$filter = "change = ?";
+			$select .= ",\n\tchange";
+		}
+		elsif ( $what eq "max" ) {
+			$filter = "change <= ?";
+			$select .= ",\n\tmax(change) as change";
+			$group = 1;
+		}
+		elsif ( $what eq "min" ) {
+			$filter = "change <= ?";
+			$select .= ",\n\tmin(change) as change";
+			$group = 1;
+		}
+	}
+	my $sql = (<<SQL.($group?<<SQL:"").($order?<<SQL:""));
 select
-	branchpath,
 	$select
 from
 	change_branches
@@ -987,8 +1008,13 @@ where
 	$filter
 SQL
 group by
-	branchpath
+	$group_by
 SQL
+order by
+	$order_by
+SQL
+	whisper "new change_branches iter:\n$sql" if $VERBOSE > 1;
+	$DB::single = 1;
 	row_iter($dbh, $change, $sql);
 }
 
@@ -2446,6 +2472,19 @@ limit 1
 SQL
 }
 
+sub min_change_exported_commits {
+	<<SQL;
+select distinct on (c.change)
+	c.change
+from
+	change c
+	join change_marks cm
+		using (change)
+order by
+	c.change asc
+limit 1
+SQL
+}
 sub parse_export_opts {
 	my $dbh = shift;
 	my $type = shift;
