@@ -3467,6 +3467,64 @@ SQL
 	}
 }
 
+use Date::Parse;
+use MooseX::TimestampTZ qw(:all);
+use Time::Local;
+
+our %cast_and_crew = map { m{^\s*(\b.*?\b)\s+<(.*)>} } split /\n/, <<'CAST_AND_CREW';
+    Gisle Aas           <gisle@aas.no>
+    Kenneth Albanowski  <kjahds@kjahds.com>
+    Graham Barr         <gbarr@ti.com>
+    Spider Boardman     <spider@orb.nashua.nh.us>
+    Tim Bunce           <Tim.Bunce@ig.co.uk>
+    Tom Christiansen    <tchrist@perl.com>
+    Hallvard B Furuseth <h.b.furuseth@usit.uio.no>
+    M. J. T. Guy        <mjtg@cus.cam.ac.uk>
+    Gurusamy Sarathy    <gsar@engin.umich.edu>
+    Jarkko Hietaniemi   <jhi@iki.fi>
+    Nick Ing-Simmons    <nik@tiuk.ti.com>
+    Andreas Koenig      <a.koenig@mind.de>
+    Doug MacEachern     <dougm@opengroup.org>
+    Paul Marquess       <pmarquess@bfsec.bt.co.uk>
+    Jeff Okamoto        <okamoto@hpcc123.corp.hp.com>
+    Ulrich Pfeifer      <pfeifer@charly.informatik.uni-dortmund.de>
+    Tom Phoenix         <rootbeer@teleport.com>
+    Norbert Pueschel    <pueschel@imsdd.meb.uni-bonn.de>
+    Dean Roehrich       <roehrich@cray.com>
+    Roderick Schertler  <roderick@argon.org>
+    Ilya Zakharevich    <ilya@math.ohio-state.edu>
+    Charles Bailey      <bailey@hmivax.humgen.upenn.edu>
+    Andy Dougherty      <doughera@lafcol.lafayette.edu>
+    Chip Salzenberg     <chip@perl.com>
+    Unknown Contributor <data-drift@so.uio.no>
+    Paul Marquess       <pmarquess@bfsec.bt.co.uk>
+    Larry W. Virden     <lvirden@cas.org>
+    Jarkko Hietaniemi   <Jarkko.Hietaniemi@cc.hut.fi>
+    Helmut Jarausch     <helmutjarausch@unknown>
+    Hugo van der Sanden <hv@crypt.compulink.co.uk>
+    Tom Phoenix (with help from M.J.T. Guy  <tomphoenix@unknown>
+    Nat Torkington      <gnat@frii.com>
+    Hallvard B Furuseth <h.b.furuseth@usit.uio.no>
+    Dale Worley         <daleworley@unknown>
+    Hans Mulder         <hansm@euronet.nl>
+    Unknown Contributor <gen@atd.rdc.ricoh.co.jp>
+    Joshua Pritikin     <joshua.pritikin@db.com>
+    Kurt D. Starsinic   <kstar@chapin.edu>
+    Dan Sugalski <sugalskd@osshe.edu>
+    Abigail	<abigail@abigail.be>
+CAST_AND_CREW
+$cast_and_crew{"(name lost)"} = '<unknown@unknown>';
+
+our %cnc_email = map { $cast_and_crew{$_} => $_ } keys %cast_and_crew;
+$cnc_email{'Nick.Ing-Simmons@tiuk.ti.com'} = "Nick Ing-Simmons";
+$cnc_email{'Graham.Barr@tiuk.ti.com'} = "Graham Barr";
+$cnc_email{'chip@atlantic.net'} = "Chip Salzenberg";
+$cnc_email{'abigail@fnx.com'} = "Abigail";
+$cnc_email{'kstar@O2.chapin.edu'} = "Kurt D. Starsinic";
+$cnc_email{'kstar@www.chapin.edu'} = "Kurt D. Starsinic";
+$cnc_email{'SYSTEM@cedar.osshe.edu'} = "Dan Sugalski";
+$cnc_email{'Joshua.Pritikin@NewYork2.dmg.deuba.com'} = "Joshua Pritikin";
+
 sub make_commit {
 	my $desc = shift;
 	my @parents = @_;
@@ -3477,8 +3535,77 @@ sub make_commit {
 
 	my $description = $desc->{description};
 
-	# some perl-specific conventions
-	my @authors;
+	# some perl-specific touch-ups
+	my @authors = $description =~ m{^\s*From:\s*(.*\S)\s*$}mg;
+	my @dates   = $description =~ m{^\s*Date:\s*(.*)}mg;
+	my @subjects = $description =~ m{^\s*(Subject|Title):\s*(.*)}mg;
+
+	for ( @authors ) {
+		while ( s{^(.*?)\ and\ (.*)}{$2} ) {
+			push @authors, $1;
+		}
+	}
+
+	my @non_headers = $description =~ m{^((?![\w\-]+:).*$)(?:\n|\s*\Z)}g;
+
+	my $nl = qr{(?:[,\s]*(\d+))};
+	my @found_changes = grep { defined }
+		map { m{change #(\d+)$nl$nl$nl$nl|\@(\d+)}g }
+			@non_headers;
+
+	$description .= "\np4raw-link: \@$_ YYY\@${_}YYY"
+		for @found_changes;
+
+	# if we only see one header, take the author and date
+	# from those messages instead
+	if (@authors == 1) {
+		$author = [ $authors[0]=~m{([^<]*) <(.*@.*)>} ];
+		$description =~ s{^\s*From.*\Q$authors[0]\E.*\n}{}m;
+		if (!@$author) {
+			@$author = reverse $authors[0]=~m{(.*@.*)\s+\((.*)\)};
+			if ( !@$author ) {
+				if ( exists $cnc_email{$authors[0]} ) {
+					my $an = $cnc_email{$authors[0]};
+					@$author = ($an, $cast_and_crew{$an});
+				}
+				elsif ( exists $cast_and_crew{$authors[0]} ) {
+					@$author =
+						($authors[0], $cast_and_crew{$authors[0]});
+				}
+				else {
+					barf "Failed to guess what $authors[0] is"
+				}
+			}
+		}
+		whisper "Author is '@$author' (from $authors[0])";
+		if($dates[0]) {
+			whisper "converting '$dates[0]'";
+			my @when_posix = strptime($dates[0]);
+			if ( @when_posix) {
+				my $when = timegm(@when_posix)." "
+					.zone($when_posix[6]);
+				whisper "date = $when";
+				# :D posixtime list!
+				push @$author, $when;
+			}
+			else {
+				push @$author, $committer->[-1];
+			}
+			if ( @dates == 1 ) {
+				$description =~ s{^\s*Date:.*\n}{}m;
+			}
+		}
+		else {
+			push @$author, $committer->[-1];
+		}
+	}
+
+	if ( @subjects == 1 ) {
+		if ( $description =~ m{^\s*(From|Subject|Title|Date):} ) {
+			$description = "$subjects[1]\n\n$description";
+			$description =~ s{^\s*(Subject|Title):.*\n}{}m;
+		}
+	}
 
 	my $branchpath = $parents[0]{branchpath};
 	my $change = $parents[0]{change};
