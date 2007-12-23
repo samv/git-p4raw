@@ -3706,18 +3706,53 @@ sub do_export_commits {
 sub do_unexport_commits {
 	my $dbh = shift;
 
-	my %export_opts = parse_export_opts($dbh, "commits", @_);
+	my %export_opts = parse_export_opts($dbh, "exported_commits", @_);
 
+	$dbh->begin_work;
+	my $max_branches =
+		change_branches_iter($dbh, $export_opts{max}, "max",
+				     {commits => 1});
+	my %current;
+	while (my $max = $max_branches->()) {
+		$current{$max->{branchpath}} = $max;
+	}
 	say "deleting commit records for $export_opts{chunk_size} changes";
 	$dbh->do("delete from change_marks where change between ? and ?",
 		 undef,
 		 $export_opts{min},
 		 $export_opts{max});
-	my $branches = change_branches_iter($dbh, $export_opts{min}-1, "max");
+	my $branches = change_branches_iter
+		($dbh, $export_opts{min}-1, "max", {commits => 1});
+	my $moved;
 	while ( my $br = $branches->() ) {
-		my $ref = _path2ref($br->{branchpath});
-		
+		if ( my $cur = delete $current{$br->{branchpath}} ) {
+			if ( $cur->{change} == $br->{change} ) {
+				# nothing to do
+			}
+			else {
+				# ok, need to rewind
+				mutter "rewind: $br->{branchpath}\@"
+					.$br->{change};
+				my $ref = _path2ref($br->{branchpath});
+				my $rc = run_err qw(git update-ref),
+					$ref, $br->{commitid};
+				moan "failed to rewind ref $ref" if $rc;
+				$moved++;
+			}
+		}
 	}
+	if ( keys %current ) {
+		mutter "deleting: @{[keys %current]}";
+		for my $dp ( keys %current ) {
+			my $rc = run_err qw(git update-ref), "-d",
+				_path2ref($dp), $current{$dp}{commit};
+			moan "failed to delete ref "._path2ref($dp);
+		}
+	}
+	elsif ( !$moved ) {
+		mutter "already up to date!  Were there no changes?";
+	}
+	$dbh->commit;
 }
 
 sub do_export {
