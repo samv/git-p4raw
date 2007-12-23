@@ -2031,13 +2031,26 @@ select
 from
 	change
 SQL
+	my $t = "any";
 	if ( $o and $o->{extant_branches} ) {
+		$t = "branch";
 		$sql .= <<SQL;
 	join change_branches
 		using (change)
 SQL
 	}
+	if ( $o and $o->{exported_commits} ) {
+		$t = "commit";
+		$sql .= <<SQL;
+	join change_marks
+		using (change)
+SQL
+	}
+
+	print $PROGNAME.": max_change($t) => " if $VERBOSE>0;
+	print "\n$sql  => " if $VERBOSE>1;
 	my ($change) = map { @$_ } @{ $dbh->selectall_arrayref($sql) };
+	print "$change\n" if $VERBOSE>0;
 
 	return $change;
 }
@@ -3322,6 +3335,8 @@ SQL
 			print "$description\n";
 		}
 
+		add_soft_refs($dbh, \$description);
+
 		# write a description
 		my $mark = gfi_start_commit
 			($dbh, $ref, $author, $committer);
@@ -3394,6 +3409,61 @@ SQL
 
 	unless ( $o->{no_checkpoint} ) {
 		gfi_checkpoint($dbh);
+	}
+}
+
+sub add_soft_refs {
+	my $dbh = shift;
+	my $desc = shift;
+
+	while ( $$desc =~ m{YYY(\S+)YYY} ) {
+		my $link = $1;
+		if ( $link =~ m{^(//.*)?@(\d+)$} ) {
+			my ($branchpath, $change) = ($1, $2);
+			my $where = "";
+			$where = "and\n\tbranchpath = ?" if $branchpath;
+			my $possible = row_iter
+				($dbh, ($branchpath?($branchpath):()),
+				 $change, <<SQL);
+select
+	cb.branchpath,
+	cb.change,
+	cm.mark,
+	m.commitid
+from
+	change_branches cb
+	join change_marks cm using (branchpath, change)
+	left join marks m using (mark)
+where
+	change = ?$where
+SQL
+					; # go, cperl-mode :)
+			my @possible;
+			while ( my $x = $possible->() ) {
+				push @possible, $x;
+			}
+			if ( not @possible ) {
+				moan "can't link to $link (unknown)";
+				next;
+			}
+			my $replacement = "";
+			for my $who ( @possible ) {
+				$replacement .=
+					("on $who->{branchpath}: "
+					 . ( $who->{commitid}
+					     ? $who->{commitid}
+					     : do {
+						     my $m = $who->{mark};
+						     my $l = int(19-length($m)/2);
+						     # this requires the patch
+						     # 0001-git-fast-import-s-X-N-X-substr-mark-2.patch
+						     ("X"x$l).":($m)".("X"x(40-$l-length($m)-3));
+					     } )
+					);
+
+			}
+			$$desc =~ s{YYY\Q$link\EYYY}{$replacement};
+		}
 	}
 }
 
