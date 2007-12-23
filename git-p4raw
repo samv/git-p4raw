@@ -3537,7 +3537,7 @@ sub make_commit {
 	# some perl-specific touch-ups
 	my @authors = $description =~ m{^\s*From:\s*(.*\S)\s*$}mg;
 	my @dates   = $description =~ m{^\s*Date:\s*(.*)}mg;
-	my @subjects = $description =~ m{^\s*(Subject|Title):\s*(.*)}mg;
+	my @subjects = $description =~ m{^\s*(?:Subject|Title):\s*(.*)}mg;
 
 	for ( @authors ) {
 		while ( s{^(.*?)\ and\ (.*)}{$2} ) {
@@ -3547,9 +3547,9 @@ sub make_commit {
 
 	my @non_headers = $description =~ m{^((?![\w\-]+:).*$)(?:\n|\s*\Z)}g;
 
-	my $nl = qr{(?:[,\s]*(\d+))};
+	my $nl = qr{(?:[\.,\s]*(\d+))};
 	my @found_changes = grep { defined }
-		map { m{change #(\d+)$nl$nl$nl$nl|\@(\d+)}g }
+		map { m{changes?\s*#(\d+)$nl?$nl?$nl?$nl?|\@(\d+)}g }
 			@non_headers;
 
 	$description .= "\np4raw-link: \@$_ YYY\@${_}YYY"
@@ -3601,10 +3601,12 @@ sub make_commit {
 
 	if ( @subjects == 1 ) {
 		if ( $description =~ m{^\s*(From|Subject|Title|Date):} ) {
-			$description = "$subjects[1]\n\n$description";
+			$DB::single = 1;
+			$description = "$subjects[0]\n\n".$description;
 			$description =~ s{^\s*(Subject|Title):.*\n}{}m;
 		}
 	}
+	$description =~ s{^((Subject|Title): |\[PATCH[^]]*\])\s*}{}g;
 
 	my $branchpath = $parents[0]{branchpath};
 	my $change = $parents[0]{change};
