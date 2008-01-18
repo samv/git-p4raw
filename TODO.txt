@@ -55,3 +55,5 @@ git-log utsl/p4/lexwarn/perl utsl/p4/mainline/perl utsl/p4/maint-5.004/perl utsl
 
    - use row iterator functions rather than pure DBI
 
+ - the "p4raw.source" config option should be used more to find the
+   path for input and depot files by the other various commands.
