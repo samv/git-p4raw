@@ -80,6 +80,9 @@ sub do_drop {
 	}
 }
 
+# when loading data, this gives the part of the query that yields the
+# rows that are new for the "change_parents" table, which can't use
+# the normal magic because it really doesn't have a primary key.
 my %prebuilt_merge =
 	('change_parents' => <<SQL,
 from
@@ -95,6 +98,99 @@ where
         t2.branchpath is null
 SQL
 	);
+
+# this is the set of tables that we load from the Perforce repository.
+# everything else - views, client maps, etc, I didn't see to be
+# interesting historically.
+my %wanted =
+	( "db.desc" => "change_desc",
+	  "db.integed" => "integed",
+	  "db.change" => "change",
+	  "db.revcx" => "revcx",
+	  "db.user" => "p4user",
+	  "db.rev" => "rev",
+	  "db.label" => "label",
+	  "db.change_branches" => "change_branches",
+	  "db.change_parents" => "change_parents",
+	  "db.marks" => "marks",
+	  "db.rev_marks" => "rev_marks",
+	  "db.change_marks" => "change_marks",
+	);
+
+# open_journal($filename) returns IO::Handle
+#
+# utility function to open a journal or checkpoint file.
+sub open_journal {
+	my $filename = shift;
+	my $open_filename = $filename;
+	if ( $filename =~ m{\.gz$} ) {
+		$open_filename = "zcat $filename|";
+	}
+	open my $fh, "$open_filename" or die $!;
+	return $fh;
+}
+
+# journal_iter($filename)
+#     returns sub()
+#         returns ($action, $x, $table, @rowdata);
+#
+# return an iterator for journal file $filename.  This decodes the
+# Perforce checkpoint format, which is relatively simple.  It assumes
+# that the input is iso-8859-1 encoding, and converts to utf-8 along
+# the way.
+sub journal_iter {
+	my $filename = shift;
+	my $fh = open_journal($filename);
+	my $wanted = qr{^\@.v\@\s+\d+\s\@(?:${\(join"|",keys%wanted)})\@};
+	sub {
+		my $L;
+		do {
+			$L = $fh->getline;
+			if ( ! defined($L) ) {
+				$fh->close;
+				return;
+			}
+		} until ($L =~ m{$wanted});
+		my @columns;
+		while ( (pos($L)||0)+1 < length $L ) {
+			my $pre = pos $L;
+			my $ok = $L =~ m{\G(?:\@((?:[^@]+|\@\@)*)\@
+					 |(-?\w+)
+					 |(\\N))\s}gx;
+			if ( !$ok ) {
+				pos($L) = $pre;
+			}
+			my ($string, $token, $null)
+				= ($1, $2, $3) if $ok;
+			if ( defined $string ) {
+				$string =~ s{\@\@}{\@}g;
+				utf8::upgrade($string);
+				push @columns, $string;
+			}
+			elsif ( defined $token ) {
+				push @columns, $token;
+			}
+			elsif ( $null ) {
+				push @columns, undef;
+			}
+			else {
+				die "end of file; $L" if $fh->eof;
+				my $p = pos $L;
+				pos($L)=0;
+				my $line;
+				my @extra;
+				do {
+					$line = $fh->getline;
+					push @extra, $line;
+				} until ($line =~ m{^(?:[^@]|\@\@)*@ ?$});
+				$L=join("",$L,@extra);
+				pos($L) = $p;
+				redo;
+			}
+		}
+		return @columns;
+	}
+}
 
 sub do_load {
 	my $dbh = shift;
@@ -185,28 +281,12 @@ SQL
 
 	my $marks_dirty;
 
-	my %sth;
+	my (%sth, %count);
 	while ( my $filename = shift @files ) {
 		say "loading data from $filename";
 		start_timer;
-		my $open_filename = $filename;
-		if ( $filename =~ m{\.gz$} ) {
-			$open_filename = "zcat $filename|";
-		}
-		my %wanted =
-			( "db.desc" => "change_desc",
-			  "db.integed" => "integed",
-			  "db.change" => "change",
-			  "db.revcx" => "revcx",
-			  "db.user" => "p4user",
-			  "db.rev" => "rev",
-			  "db.label" => "label",
-			  "db.change_branches" => "change_branches",
-			  "db.change_parents" => "change_parents",
-			  "db.marks" => "marks",
-			  "db.rev_marks" => "rev_marks",
-			  "db.change_marks" => "change_marks",
-			);
+		my $ji = journal_iter($filename);
+
 		my $get_sth = sub {
 			my ($table, $size)=@_;
 			$sth{$table."\0".$size} ||= do {
@@ -227,54 +307,16 @@ SQL
 				$dbh->prepare($sql);
 			};
 		};
-		my $wanted_re = join "|", keys %wanted;
-		my $regex_wanted = qr/(?:$wanted_re)/;
-		open JOURNAL, "$open_filename" or die $!;
+
 		#binmode JOURNAL, ":encoding(iso-8859-1)";
 		my ($rows, $dirty, $dirty_rows);
 		$dbh->begin_work;
 		$dbh->{AutoCommit} = 0;
 		$dbh->{PrintError} = 0;
-		my %count;
-		while ( <JOURNAL> ) {
-			next unless m{^\@pv\@\s\d+\s@($regex_wanted)@};
-			my $db = $wanted{$1};
-			my @columns;
-			while ( (pos($_)||0)+1 < length $_ ) {
-				my $pre = pos $_;
-				my $ok = m{\G(?:\@((?:[^@]+|\@\@)*)\@|(-?\w+)|(\\N))\s}g;
-				if ( !$ok ) {
-					pos($_) = $pre;
-				}
-				my ($string, $token, $null)
-					= ($1, $2, $3) if $ok;
-				if ( defined $string ) {
-					$string =~ s{\@\@}{\@}g;
-					utf8::upgrade($string);
-					push @columns, $string;
-				}
-				elsif ( defined $token ) {
-					push @columns, $token;
-				}
-				elsif ( $null ) {
-					push @columns, undef;
-				}
-				else {
-					die "end of file; $_" if eof JOURNAL;
-					my $p = pos $_;
-					pos($_)=0;
-					my $line;
-					my @extra;
-					do {
-						$line = readline JOURNAL;
-						push @extra, $line;
-					} until ($line =~ m{@\s*$});
-					$_.=join("",@extra);
-					pos($_) = $p;
-					redo;
-				}
-			}
-			@columns = (@columns[3..$#columns]);
+		while ( my @columns = $ji->() ) {
+			my $action = shift @columns;  # "rv", "dv", etc
+			shift @columns;  # some number.  maybe a row version.
+			my $db = $wanted{shift @columns};
 			my $sth = $get_sth->($db,scalar(@columns)+1);
 			eval {
 				$sth->execute($filename, @columns);
