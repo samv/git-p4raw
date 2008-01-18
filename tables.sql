@@ -1,3 +1,8 @@
+-- git-p4raw state
+
+-- Note that the order of columns in here is important; it must match
+-- the Perforce checkpoint/journal format.
+
 -- tag every row with a source file, but factor these out
 create table source_filename (
     source_file_id serial primary key,
@@ -15,6 +20,10 @@ create table int_type (
     description text
 );
   
+-- some integration types which I have yet to fully decypher; however,
+-- I considered their variation relatively disinteresting historically
+-- as it is derivable.  So, these are for display and possible use as
+-- comments as seen fit.
 insert into int_type values
 	(0, 'merge from',    'change copied from subj. to obj.'),
 	(1, 'merge into',    'change copied from obj. to subj.'),
@@ -32,6 +41,10 @@ insert into int_type values
 	(13, 'edit into',    'patch picked but altered from subj to obj.');
 
 -- integration history (branch/merge/ignore)
+--
+-- This is the meat of the metadata, really.  We index 12 distinct
+-- varieties of crap out of this once it's loaded, and end up querying
+-- it a lot.
 create table integed (
     subject text not null,	-- what file this log refers to
     object  text not null,	-- file the record refers to in objective
@@ -44,6 +57,8 @@ create table integed (
     primary key (change, subject, subject_maxrev, object, object_maxrev)
 ) inherits (source_file);
 
+-- users.  This is easily supplanted with a 'p4raw-extra-users.csv' if
+-- seen fit.
 create table p4user (
     who_user text, -- username
     email text,    -- e-mail address
@@ -57,6 +72,7 @@ create table p4user (
     alwayzero2 int -- ???
 ) inherits (source_file);
 
+-- A row in each of these for the change
 -- change master records
 create table change (
     change int not null primary key,
@@ -67,7 +83,7 @@ create table change (
     who_host text,
     who_user text,
     change_time int, 	-- epoch time of change
-    closed int,		-- whether this change is committed yet jjjjjjj
+    closed int,		-- whether this change is committed yet
     short_desc text     -- short description of change
 ) inherits (source_file);
 
@@ -100,12 +116,16 @@ create table revcx (
        change_type int REFERENCES change_type
 ) inherits (source_file);
 
+-- p4 also has a revdx, revhx which presumably correspond to many of
+-- the indexes that we create (see constraints.sql), as their data
+-- does not appear in the checkpoints or journal files.
+
 -- detail on depot RCS files
 create table rev (
        depotpath TEXT,
        revision INT,
        primary key (depotpath, revision),
-       file_type INT,	-- type;
+       file_type INT,	-- type; generally ignored by this tool, save execute
        		 -- 0 0000 0000 0000 - text
        		 -- 0 0010 0000 0000 - xtext (executable bit set)
        		 -- 0 0000 0010 0000 - ktext (keyword expansion)
@@ -118,15 +138,16 @@ create table rev (
        		 -- 0 0100 0000 0000 - symlink
        rev_change_type INT,
        change INT NOT NULL,
-       useless_epoch1 INT,
+       useless_epoch1 INT, -- who cares :)
        useless_epoch2 INT,
        revision_md5 TEXT,
        unknown INT,
        rcs_file TEXT,
        rcs_revision VARCHAR(10),
-       checkout_type INT
+       checkout_type INT   -- this name is a guess.
 ) inherits (source_file);
 
+-- tags
 create table label (
        tagname TEXT not null,
        depotpath TEXT not null,
@@ -134,6 +155,7 @@ create table label (
        revision int NOT NULL       
 ) inherits (source_file);
 
+-- this table holds the marks that we send to git fast-import
 create sequence gfi_mark;
 create table marks (
 	mark int not null primary key,
@@ -162,12 +184,15 @@ create table rev_marks (
 	mark int not null references marks DEFERRABLE INITIALLY DEFERRED
 ) inherits (source_file);
 
+-- what branches we determined exist along the way
 create table change_branches (
        branchpath TEXT not null,
        change INT null,
        primary key (branchpath, change)
 ) inherits (source_file);
 
+-- mapping changes to branches and marks - join with marks to get
+-- commitids
 create table change_marks (
 	branchpath TEXT not null,
 	change int not null,
@@ -176,20 +201,22 @@ create table change_marks (
 	unique (mark)
 ) inherits (source_file);
 
+-- parentage of changes.  There are actually two types of fact
+-- disguised in this one table.  I don't use inheritance because Pg's
+-- inherited tables don't inherit constraints!
 create table change_parents (
 	branchpath TEXT not null,
 	change int not null,
 
+	-- a parent exists of a branchpath/change,
 	parent_branchpath TEXT null,
 	parent_change int null,
 
+	-- OR an explicit reference is given (anything that will 'git
+	-- rev-parse')
 	ref TEXT null,
-	manual boolean NOT NULL default true,
-	all_headrev boolean NULL,
-	none_unseen boolean NULL,
-	octopus boolean NOT NULL DEFAULT false,
-	evil boolean NOT NULL default false,
 
+	-- enforce this rule
 	CHECK (
 		((parent_change is not null and parent_branchpath is not null)
 		 AND
@@ -199,7 +226,17 @@ create table change_parents (
 		 (ref is not null))
 	),
 
-	-- zomg no .. he's not going to put JSON in there is he?
-	json_info TEXT
-) inherits (source_file);
+	-- presence of data in this column invalidates all the rows
+	-- that don't have it.  This hack should be do-away-able once
+	-- "p4raw dump" knows how to save row deletes.
+	manual boolean NOT NULL default true,
 
+	-- These were all information which was derived, and should be
+	-- removed.
+	all_headrev boolean NULL,
+	none_unseen boolean NULL,
+	octopus boolean NOT NULL DEFAULT false,
+	evil boolean NOT NULL default false,
+	json_info text,
+
+) inherits (source_file);
