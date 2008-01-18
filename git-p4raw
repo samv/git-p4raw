@@ -4,6 +4,7 @@ use strict vars, subs;
 use warnings;
 use Scriptalicious;
 use Maptastic;
+use Maptastic::DBI qw(row_iter);
 use FindBin qw($Bin);
 use List::Util qw(sum max min);
 use Scalar::Util qw(looks_like_number);
@@ -1033,44 +1034,6 @@ sub derive_branch_src {
 			      parent_change => $info->{int_change},
 			      manual => 0,
 			    });
-	}
-}
-
-sub row_iter {
-	my $dbh = shift;
-	my $sql = pop;
-	my @args = @_;
-	my $sth;
-	my @putback;
-	my $deplete;
-	sub {
-		if ( @_ ) {
-			push @putback, @_;
-			return ();
-		}
-		elsif ( @putback ) {
-			return pop @putback;
-		}
-		if ( !$sth and !$sql ) {
-			return undef;
-		}
-		if ( !$sth ) {
-			if ( ref $sql ) {
-				$sth = $sql;
-			}
-			else {
-				$sth = $dbh->prepare($sql)
-					or die $dbh->errstr;
-			}
-			$sth->execute(@args) or die $sth->errstr;
-		}
-		my $rv = $sth->fetchrow_hashref;
-		if ( !$rv ) {
-			$sth->finish;
-			undef($sth);
-			undef($sql);
-		};
-		$rv;
 	}
 }
 
