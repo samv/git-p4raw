@@ -218,10 +218,7 @@ sub do_load {
 	goto no_filter if $load_opts{force};
 
 	my $already_got = row_iter($dbh, <<'SQL');
-select distinct
-		source_file
-	from
-		change
+select source_file from source_filename
 SQL
 	my %got;
 	my $max_checkpoint;
@@ -285,6 +282,11 @@ SQL
 	my (%sth, %count);
 	while ( my $filename = shift @files ) {
 		say "loading data from $filename";
+		$dbh->do
+			('insert into source_filename (source_file) '
+			 .'values (?)', undef, $filename);
+		my $source_file_id = $dbh->last_insert_id
+			(undef,undef,'source_filename', undef);
 		start_timer;
 		my $ji = journal_iter($filename);
 
@@ -320,7 +322,7 @@ SQL
 			my $db = $wanted{shift @columns};
 			my $sth = $get_sth->($db,scalar(@columns)+1);
 			eval {
-				$sth->execute($filename, @columns);
+				$sth->execute($source_file_id, @columns);
 				$rows++;
 				$dirty_rows++;
 				$dirty+=sum map {

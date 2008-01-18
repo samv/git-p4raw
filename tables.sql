@@ -1,10 +1,20 @@
+-- tag every row with a source file, but factor these out
+create table source_filename (
+    source_file_id serial primary key,
+    source_file text
+);
+
+create table source_file (
+    source_file_id integer not null
+);
+
 -- lookup table - integration types
 create table int_type (
     int_type int not null primary key,
     title text,
     description text
 );
-
+  
 insert into int_type values
 	(0, 'merge from',    'change copied from subj. to obj.'),
 	(1, 'merge into',    'change copied from obj. to subj.'),
@@ -23,7 +33,6 @@ insert into int_type values
 
 -- integration history (branch/merge/ignore)
 create table integed (
-    source_file text not null,
     subject text not null,	-- what file this log refers to
     object  text not null,	-- file the record refers to in objective
     object_minrev int not null,	-- objective revisions range - lower bound
@@ -33,10 +42,9 @@ create table integed (
     int_type int not null references int_type,
     change int not null,	-- Change this occurred in
     primary key (change, subject, subject_maxrev, object, object_maxrev)
-);
+) inherits (source_file);
 
 create table p4user (
-    source_file text not null,
     who_user text, -- username
     email text,    -- e-mail address
     junk text,     -- always empty?
@@ -47,11 +55,10 @@ create table p4user (
     alwayzero1 int,-- ???
     dunno2 text,   -- ???
     alwayzero2 int -- ???
-);
+) inherits (source_file);
 
 -- change master records
 create table change (
-    source_file text not null,
     change int not null primary key,
     change_desc_id int,	-- this almost always contained the same value as
 			-- 'change', or a dead revision.  The one time it
@@ -62,14 +69,13 @@ create table change (
     change_time int, 	-- epoch time of change
     closed int,		-- whether this change is committed yet jjjjjjj
     short_desc text     -- short description of change
-);
+) inherits (source_file);
 
 -- change description table
 create table change_desc (
-    source_file text not null,
        change_desc_id INT not null primary key,
        description TEXT
-);
+) inherits (source_file);
 
 -- change types
 create table change_type (
@@ -87,19 +93,15 @@ insert into change_type values
 
 -- change inventories for revisions
 create table revcx (
-    source_file text not null,
        change int not null,	-- change this occurred in
        depotpath text,		-- what changed
        primary key (change, depotpath),
        revision int,		-- new file revision (#number)
        change_type int REFERENCES change_type
-);
-
-
+) inherits (source_file);
 
 -- detail on depot RCS files
 create table rev (
-    source_file text not null,
        depotpath TEXT,
        revision INT,
        primary key (depotpath, revision),
@@ -123,22 +125,17 @@ create table rev (
        rcs_file TEXT,
        rcs_revision VARCHAR(10),
        checkout_type INT
-);
--- we ignore 'revdx'; doesn't look to be any useful information there.
+) inherits (source_file);
 
--- tags
 create table label (
-    source_file text not null,
        tagname TEXT not null,
        depotpath TEXT not null,
        primary key (tagname, depotpath),
        revision int NOT NULL       
-);
+) inherits (source_file);
 
--- this table holds the marks that we send to git fast-import
 create sequence gfi_mark;
 create table marks (
-    source_file text not null default 'new',
 	mark int not null primary key,
 	commitid char(40) null,
 	blobid char(40) null,
@@ -146,49 +143,40 @@ create table marks (
 		(commitid is not null) OR
 		(blobid is not null)
 	)
-);
+) inherits (source_file);
 
 -- this table obviously lists the "depots", but this tool doesn't
 -- currently do much sensible with this information.
 create table depot (
-    source_file text not null default 'new',
 	depot TEXT not null primary key,
 	num1 int not null,
 	string1 text,
 	pathspec text
-);
+) inherits (source_file);
 
 -- mapping file revisions to marks - join with marks to get blobids
 create table rev_marks (
-    source_file text not null default 'new',
 	depotpath TEXT not null,
 	revision int not null,
 	primary key (depotpath,revision),
 	mark int not null references marks DEFERRABLE INITIALLY DEFERRED
-);
+) inherits (source_file);
 
--- what branches we determined exist along the way
 create table change_branches (
-    source_file text not null default 'new',
        branchpath TEXT not null,
        change INT null,
        primary key (branchpath, change)
-);
+) inherits (source_file);
 
--- mapping changes to branches and marks - join with marks to get
--- commitids
 create table change_marks (
-    source_file text not null default 'new',
 	branchpath TEXT not null,
 	change int not null,
 	primary key (branchpath, change),
 	mark int not null references marks DEFERRABLE INITIALLY DEFERRED,
 	unique (mark)
-);
+) inherits (source_file);
 
--- parentage of changes
 create table change_parents (
-    source_file text not null default 'new',
 	branchpath TEXT not null,
 	change int not null,
 
@@ -213,63 +201,5 @@ create table change_parents (
 
 	-- zomg no .. he's not going to put JSON in there is he?
 	json_info TEXT
-);
+) inherits (source_file);
 
--- TODO create language 'plperl';
-
--- this is a memoization that will be important.
--- TODOcreate table merge_bases (	
--- TODO	left_branch TEXT not null,
--- TODO	left_change int not null,
--- TODO	foreign key (branchpath, change)
--- TODO		references change_branches (branchpath,change)
--- TODO		on delete cascade,
--- TODO	
--- TODO	right_branch TEXT not null,
--- TODO	right_change int not null,
--- TODO	foreign key (branchpath, change)
--- TODO		references change_branches (branchpath,change)
--- TODO		on delete cascade,
--- TODO	
--- TODO	base_branch TEXT not null,
--- TODO	base_change int not null,
--- TODO	foreign key (branchpath, change)
--- TODO		references change_branches (branchpath,change)
--- TODO		on delete cascade,
--- TODO
--- TODO	CHECK (
--- TODO		CASE WHEN
--- TODO			(left_change = right_change)
--- TODO		THEN 
--- TODO			(left_branch < right_branch)
--- TODO		ELSE
--- TODO			(left_change < right_change)
--- TODO		END
--- TODO	),
--- TODO	CHECK (
--- TODO		base_change <= right_change or
--- TODO		base_change <= left_change
--- TODO	)
--- TODO);
--- TODO
--- TODOcreate function find_merge_base(text, int, text, int) returns bool AS $$
--- TODO	my ($left_bp, $left_chg, $right_bp, $right_chg) = @_;
--- TODO
--- TODO	my $sth = spi_prepare
--- TODO		("select * from change_parents where "
--- TODO       		."branchpath = ? and change = ? order by manual desc");
--- TODO	
--- TODO	my @start = map { join '@', @$_ }
--- TODO		[$left_bp,$left_chg], [$right_bp, $right_chg];
--- TODO
--- TODO$$ language 'plperl';
--- TODO
--- TODOcreate function find_merge_branch(text, int, text, int) returns text AS $$
--- TODO
--- TODO
--- TODO$$ language 'plperl';
--- TODO
--- TODOcreate function find_merge_branch(text, int, text, int) returns text AS $$
--- TODO
--- TODO
--- TODO$$ language 'plperl';

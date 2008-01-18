@@ -1,4 +1,36 @@
 
+-- adding constraints pertaining to datafile load state
+alter table source_file add constraint source_file_id_valid
+      foreign key (source_file_id) references source_filename;
+
+-- *sigh* and the rest
+alter table integed add constraint source_file_id_valid
+      foreign key (source_file_id) references source_filename;
+alter table p4user add constraint source_file_id_valid
+      foreign key (source_file_id) references source_filename;
+alter table change add constraint source_file_id_valid
+      foreign key (source_file_id) references source_filename;
+alter table change_desc add constraint source_file_id_valid
+      foreign key (source_file_id) references source_filename;
+alter table revcx add constraint source_file_id_valid
+      foreign key (source_file_id) references source_filename;
+alter table rev add constraint source_file_id_valid
+      foreign key (source_file_id) references source_filename;
+alter table label add constraint source_file_id_valid
+      foreign key (source_file_id) references source_filename;
+alter table marks add constraint source_file_id_valid
+      foreign key (source_file_id) references source_filename;
+alter table depot add constraint source_file_id_valid
+      foreign key (source_file_id) references source_filename;
+alter table rev_marks add constraint source_file_id_valid
+      foreign key (source_file_id) references source_filename;
+alter table change_branches add constraint source_file_id_valid
+      foreign key (source_file_id) references source_filename;
+alter table change_marks add constraint source_file_id_valid
+      foreign key (source_file_id) references source_filename;
+alter table change_parents add constraint source_file_id_valid
+      foreign key (source_file_id) references source_filename;
+
 -- checking all change number references are valid
 alter table rev add constraint rev_change_valid
       foreign key (change) references change;
