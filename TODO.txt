@@ -1,6 +1,7 @@
 
  - the journals have @rv@ 'update' rows that the checkpoints don't.
-   'load' needs to handle these.
+   'load' needs to handle these, and ideally 'dump' wants to be able
+   to write them out when rows change.
 
  - the change_parents table has a horrid denormalised JSON dump of
    impedence mismatches that is never recalculated unless you delete
@@ -34,7 +35,8 @@
 
 git-log utsl/p4/lexwarn/perl utsl/p4/mainline/perl utsl/p4/maint-5.004/perl utsl/p4/oneperl utsl/p4/perl utsl/p4/perlext/Compiler utsl/p4/perlext/Thread utsl/p4/relperl utsl/p4/thrperl utsl/p4/win32/perl ^perl-5.003 ^perl-5.004_04 | perl -nle 'BEGIN{$i=176386;}m{^commit (.*)} && ($commit=$1); m{p4raw-id: (.*)@(\d+)} && do{ ++$i; print "\@pv\@ 3 \@db.marks\@ $i \@$commit@\n\@pv\@ 3 \@db.change_marks\@ \@$1\@ $2 $i"}' > ../p4raw-extra-published-1.asv
 
-   there should be a command to drop all the change marks we know about and then 
+   there should be a command to drop all the change marks we know
+   about and then re-read them from all the branches we can see.
 
  - unexport-commits doesn't rewind the p4/* head pointers.  You
    currently have to blow them all away and pipe the output of
@@ -46,3 +48,12 @@ git-log utsl/p4/lexwarn/perl utsl/p4/mainline/perl utsl/p4/maint-5.004/perl utsl
  - there should be an "info" command which summarises what has been
    imported and converted so far.
 
+ - refactoring:
+
+   - getopt fragment used by many commands for subcommand argument
+     passing.
+
+   - use row iterator functions rather than pure DBI
+
+ - the "p4raw.source" config option should be used more to find the
+   path for input and depot files by the other various commands.
