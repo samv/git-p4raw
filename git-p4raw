@@ -193,6 +193,23 @@ sub journal_iter {
 	}
 }
 
+sub Q {
+	my $ri = row_iter(@_);
+	my $x = $ri->();
+	if ( $x ) {
+		my @rv = map { $x->{$_} } sort keys %$x;
+		if ( wantarray ) {
+			@rv
+		}
+		else {
+			$rv[0];
+		}
+	}
+	else {
+		();
+	}
+}
+
 sub do_load {
 	my $dbh = shift;
 
@@ -281,6 +298,7 @@ SQL
 
 	my (%sth, %count);
 	while ( my $filename = shift @files ) {
+		$dbh->begin_work;
 		say "loading data from $filename";
 		$dbh->do
 			('insert into source_filename (source_file) '
@@ -313,7 +331,6 @@ SQL
 
 		#binmode JOURNAL, ":encoding(iso-8859-1)";
 		my ($rows, $dirty, $dirty_rows);
-		$dbh->begin_work;
 		$dbh->{AutoCommit} = 0;
 		$dbh->{PrintError} = 0;
 		while ( my @columns = $ji->() ) {
@@ -2431,7 +2448,9 @@ sub min_change_blobs {
 select distinct on (r.change)
 	r.change
 from
-	revcx r
+	change c
+	join revcx r
+		on (r.change = c.change and c.closed != 0)
 	left join rev_marks rm
 		using (depotpath, revision)
 where
@@ -2501,6 +2520,8 @@ from
 	change c
 	join change_marks cm
 		using (change)
+where
+	c.closed != 0
 order by
 	c.change asc
 limit 1
@@ -3927,6 +3948,70 @@ SQL
 		}
 	}
 	$dbh->commit;
+}
+
+sub do_status {
+	my $dbh = shift;
+
+	# let's be simple about this - just show a fixed status
+	print "=" x 20, " DATA FILES ", "=" x 20, "\n";
+	my $source_files = row_iter($dbh, <<SQL);
+select source_file,
+       source_file.tableoid::regclass as table,
+       count(*) as num
+  from source_file
+  join source_filename using (source_file_id)
+ group by source_file, source_file.tableoid;
+SQL
+	my $lsf;
+	my $ll;
+	while ( my $sf = $source_files->() ) {
+		if ( !$lsf or $lsf ne $sf->{source_file} ) {
+			print "\n" if $lsf;
+			print "$sf->{source_file}:\n\t";
+			$ll = 8;
+			$lsf = $sf->{source_file};
+		}
+		else {
+			print ", ";
+			$ll+= 2;
+		}
+		my $x = "$sf->{num} x $sf->{table}";
+		$ll += length $x;
+		if ( $ll > 78 ) {
+			print "\n\t";
+			$ll = 8 + length $x;
+		}
+		print $x;
+	}
+	print "\n" if $lsf;
+
+	print "=" x 20, " IMPORT PROGRESS ", "=" x 20, "\n";
+	# ok, now the primary thing we care about is how far through
+	# each of the various states we've performed.
+	$| = 1;
+	print "change range: ";
+	printf "%d .. %d\n", Q($dbh, <<SQL);
+select min(change),
+       max(change)
+  from change
+SQL
+	print "highest closed change: ";
+	print Q($dbh, <<SQL)."\n";
+select max(change)
+  from change
+ where closed = 1
+SQL
+	print "min closed change with:\n";
+	print "\tnew images: ";
+	print min_change($dbh, "blobs"), "\n";
+	print "\tno branches: ";
+	print min_change($dbh, "branches"), "\n";
+
+	print "min tracked change with:\n";
+	print "\tno commits: ";
+	print min_change($dbh, "commits"), "\n";
+
 }
 
 #=====================================================================
