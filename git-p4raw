@@ -106,6 +106,7 @@ my %wanted =
 	( "db.desc" => "change_desc",
 	  "db.integed" => "integed",
 	  "db.change" => "change",
+	  "db.depot" => "depot",
 	  "db.revcx" => "revcx",
 	  "db.user" => "p4user",
 	  "db.rev" => "rev",

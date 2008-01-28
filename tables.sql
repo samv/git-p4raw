@@ -148,6 +148,16 @@ create table marks (
 	)
 );
 
+-- this table obviously lists the "depots", but this tool doesn't
+-- currently do much sensible with this information.
+create table depot (
+    source_file text not null default 'new',
+	depot TEXT not null primary key,
+	num1 int not null,
+	string1 text,
+	pathspec text
+);
+
 -- mapping file revisions to marks - join with marks to get blobids
 create table rev_marks (
     source_file text not null default 'new',
