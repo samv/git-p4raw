@@ -285,6 +285,7 @@ SQL
 			}
 		} @files;
 		@files = sort { ($b=~m{^checkpoint.\d+.gz}) <=> ($a=~m{^checkpoint.\d+.gz}) or
+				($b=~m{^p4raw-extra-\w+.asv$}) <=> ($a=~m{^p4raw-extra-\w+.asv$}) or
 				($b=~m{^journal.\d+.gz}) <=> ($a=~m{^journal.\d+.gz}) or do {
 					my $a_r = $a =~ m{(\d+)};
 					my $b_r = $b =~ m{(\d+)};
