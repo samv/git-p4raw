@@ -4020,7 +4020,8 @@ select source_file,
        count(*) as num
   from source_file
   join source_filename using (source_file_id)
- group by source_file, source_file.tableoid;
+ group by source_file, source_file.tableoid
+ order by source_file, source_file.tableoid::regclass
 SQL
 	my $lsf;
 	my $ll;
@@ -4051,8 +4052,8 @@ SQL
 	$| = 1;
 	print "change range: ";
 	printf "%d .. %d\n", Q($dbh, <<SQL);
-select min(change),
-       max(change)
+select min(change) as a,
+       max(change) as b
   from change
 SQL
 	print "highest closed change: ";
