@@ -10,7 +10,8 @@ create table source_filename (
 );
 
 create table source_file (
-    source_file_id integer not null
+    source_file_id  integer,
+    source_file_max integer
 );
 
 -- lookup table - integration types

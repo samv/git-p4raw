@@ -1,8 +1,4 @@
 
- - the journals have @rv@ 'update' rows that the checkpoints don't.
-   'load' needs to handle these, and ideally 'dump' wants to be able
-   to write them out when rows change.
-
  - the change_parents table has a horrid denormalised JSON dump of
    impedence mismatches that is never recalculated unless you delete
    the change_parents row.
