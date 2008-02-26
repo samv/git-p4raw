@@ -382,7 +382,7 @@ SQL
 				$dirty = 0;
 				$dirty_rows = 0;
 				$dbh->commit;
-				$dbh->begin_work;
+				$dbh->{AutoCommit} = 0;
 			}
 		}
 		if ( !$loaded_updates ) {
@@ -500,6 +500,7 @@ SQL
 			mutter "$rows rows affected";
 		}
 		$dbh->commit;
+		$dbh->{AutoCommit} = 1;
 	}
 	if ( $marks_dirty ) {
 		my ($top) = values%{row_iter($dbh,<<SQL)->()};
