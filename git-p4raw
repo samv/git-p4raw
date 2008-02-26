@@ -22,7 +22,7 @@ use JSON;
 use YAML;
 BEGIN { eval "use Term::ProgressBar" };
 
-use vars qw($SHARE $SCRIPT_MODE);
+use vars qw($SHARE $SCRIPT_MODE $SOURCE);
 $SHARE = $Bin;
 
 sub do_init {
@@ -2146,11 +2146,13 @@ sub get_rcs {
 	return undef if !$rcs_file;
 	$rcs_file =~ s{^//}{};
 	my $cmd;
-	if ( -f "$rcs_file,d/$rcs_revision" ) {
-		$cmd = "cat '$rcs_file,d/$rcs_revision'";
+	$SOURCE ||= (capture("git", "config", "p4raw.source")
+		     || ".")."/";
+	if ( -f "$SOURCE$rcs_file,d/$rcs_revision" ) {
+		$cmd = "cat '$SOURCE$rcs_file,d/$rcs_revision'";
 	}
-	elsif ( -f "$rcs_file,d/$rcs_revision.gz" ) {
-		$cmd = "zcat '$rcs_file,d/$rcs_revision'";
+	elsif ( -f "$SOURCE$rcs_file,d/$rcs_revision.gz" ) {
+		$cmd = "zcat '$SOURCE$rcs_file,d/$rcs_revision'";
 	}
 	else {
 	#    In fact I'd be highly tempted to parse the RCS file
@@ -2160,7 +2162,7 @@ sub get_rcs {
 	#    versions of it for feeding to fast-import.  Consider an
 	#    RCS file with many revisions; getting all revisions out
 	#    with `co -p` will be O(N^2) but directly will be O(N)
-		$cmd = "co -q -p$rcs_revision -kb '$rcs_file'";
+		$cmd = "co -q -p$rcs_revision -kb '$SOURCE$rcs_file'";
 	}
 	open CMD, "-|", "$cmd" or die $!;
 	binmode CMD;
