@@ -3888,8 +3888,16 @@ sub do_dump {
 	      -e ($journal = "p4raw-journal-$i.asv.gz");
 	      $i++ ) { }
 
+	$dbh->begin_work;
 	say "creating new journal file $journal";
 	open JOURNAL, "|-", "gzip > $journal";
+	$dbh->do
+		('insert into source_filename (source_file) '
+		 .'values (?)', undef, $journal);
+	my $source_file_id = $dbh->last_insert_id
+		(undef,undef,'source_filename', undef);
+	$dbh->commit;
+
 	my $total;
 	for my $table ( qw( change_branches marks rev_marks
 			    change_marks change_parents ) ) {
@@ -3898,7 +3906,7 @@ sub do_dump {
 		my $is_cp = $table eq "change_parents";
 		my $sth = $dbh->prepare(<<SQL.($is_cp?<<SQL:""));
 select * from $table
-where source_file = 'new'
+where source_file_id is null
 SQL
 and (manual or (not manual and
      not exists (select true from change_parents cp2
@@ -3912,14 +3920,15 @@ SQL
 			$c++;
 			$total++;
 			shift @data;
+			shift @data;  # FIXME - use this to generate @rv@, @dv@ rows in output journal
 			print JOURNAL _to_p4_journal_format $table,
 				@data;
 		}
 		mutter "mutter updating $table";
-		$dbh->do(<<SQL);
+		$dbh->do(<<SQL, undef, $source_file_id);
 update $table
-set source_file = '$journal'
-where source_file = 'new'
+set source_file_id = ?
+where source_file_id is null
 SQL
 		mutter "commit";
 		$dbh->commit;
