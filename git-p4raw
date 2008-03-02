@@ -4087,6 +4087,139 @@ SQL
 
 }
 
+# command to recover marks and change_parents information from a
+# published history.
+sub do_recover {
+	my $dbh = shift;
+
+	my ($commit, @parents);
+	$dbh->begin_work;
+	$dbh->do("set constraints all deferred");
+	$dbh->do("set transaction isolation level serializable");
+	my $create_sth = $dbh->prepare(<<SQL);
+insert into change_branches (branchpath, change) values (?, ?)
+SQL
+	my $create_bp = sub { $create_sth->execute(@_) };
+	my $mark_sth = $dbh->prepare(<<SQL);
+select nextval('gfi_mark');
+SQL
+	my $new_mark = sub { Q($dbh, $mark_sth) };
+
+	my $insert_change_mark_sth = $dbh->prepare(<<SQL);
+insert into change_marks (branchpath, change, mark) values (?, ?, ?)
+SQL
+	my $insert_mark_sth = $dbh->prepare(<<SQL);
+insert into marks (mark, commitid) values (?, ?)
+SQL
+	my $find_commit_sth = $dbh->prepare(<<SQL);
+select
+	branchpath, change,
+	mark
+from
+	change_branches
+	join change_marks
+		using (branchpath, change)
+	join marks
+		using (mark)
+where
+	commitid = ?
+SQL
+	my $insert_change_parent_sth = $dbh->prepare(<<SQL);
+insert into change_parents
+	(branchpath, change, parent_branchpath, parent_change)
+values
+	(?, ?, ?, ?)
+SQL
+
+	my $insert_change_parent_ref_sth = $dbh->prepare(<<SQL);
+insert into change_parents
+	(branchpath, change, ref)
+values
+	(?, ?, ?)
+SQL
+	my $select_mark_sth = $dbh->prepare(<<SQL);
+select mark from marks where commitid = ?
+SQL
+
+	my ($new_marks, $new_parent_normal, $new_parent_ref);
+
+	my $note_commitid = sub {
+		my $branchpath = shift;
+		my $change = shift;
+		$create_bp->($branchpath, $change);
+		my $commitid = shift;
+		my $mark = Q($dbh, $commitid, $select_mark_sth);
+		if ( !$mark ) {
+			$mark = $new_mark->();
+			$new_marks++;
+			$insert_mark_sth->execute
+				($mark, $commitid);
+		}
+		#$DB::single = 1;
+		$insert_change_mark_sth->execute
+			($branchpath, $change, $mark);
+		while ( my $parent = shift ) {
+			my ($p_branchpath, $p_change, $found )
+				= Q( $dbh, $parent, $find_commit_sth );
+			#whisper( ($found ? "found OK" : "not found"), ": ",
+				 #substr($parent, 0, 12) );
+			#$DB::single = 1;
+			if ( $found ) {
+				mutter "parent $p_branchpath\@$p_change mark $found";
+				# insert a change_parents row
+				$insert_change_parent_sth->execute
+					($branchpath, $change, $p_branchpath, $p_change);
+				$new_parent_normal++;
+			}
+			else {
+				# use a ref.  See if this commit has a tag.
+				my $name_rev = `git-name-rev --tags $parent 2>/dev/null`;
+				$DB::single = 1;
+				my ($parent_ref) = $name_rev =~ m{ tags/(.*)\^};
+
+				# no tag?  Oh well, use the raw commit ID
+				$parent_ref ||= substr $parent, 0, 12;
+				mutter "parent $parent_ref";
+				$insert_change_parent_ref_sth->execute
+					($branchpath, $change, $parent_ref);
+				$new_parent_ref++;
+			}
+		}
+	};
+	my $heads;
+	if ( @_ ) {
+		my $heads = shift;
+	}
+	else {
+		$heads = join " ", map { m{(refs/heads/.*)} } `git-show-ref --heads`;
+	}
+
+	open(my $rec, "-|", "git-log --topo-order --reverse --parents $heads");
+	while ( <$rec> ) {
+		if ( m{^commit (\w+)(?: (.*))?$} ) {
+			$commit=$1;
+			@parents=split" ",$2 if $2;
+		}
+		elsif ( my ($depotpath, $change) = 
+			m{^\s*p4raw-id:\s*(\S*)@(\d+)} ) {
+			mutter "adding $depotpath\@$change (".substr($commit, 0, 12).")";
+			$DB::single = 1;
+			$note_commitid->($depotpath, $change, $commit, @parents);
+			#$commit=undef;
+			#@parents=();
+		}
+	}
+	my @what;
+	push @what, "marks for $new_marks commit(s)"
+		if $new_marks;
+	push @what, "$new_parent_normal parents between p4 changes"
+		if $new_parent_normal;
+	push @what, "$new_parent_ref grafted parents to git commit"
+		if $new_parent_ref;
+	say "Adding: ", join ("; ", @what) if @what;
+	$dbh->commit;
+}
+
 #=====================================================================
 #  MAIN SECTION STARTS HERE
 #=====================================================================
