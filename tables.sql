@@ -198,8 +198,8 @@ create table change_marks (
 	branchpath TEXT not null,
 	change int not null,
 	primary key (branchpath, change),
-	mark int not null references marks DEFERRABLE INITIALLY DEFERRED,
-	unique (mark)
+	mark int not null references marks DEFERRABLE INITIALLY DEFERRED
+	-- unique (mark)
 ) inherits (source_file);
 
 -- parentage of changes.  There are actually two types of fact
