@@ -3143,7 +3143,7 @@ SQL
 	my $sortfunc = sub {
 		my ($c_a) = ($_[0] =~ m{@(\d+)$});
 		my ($c_b) = ($_[1] =~ m{@(\d+)$});
-		($c_b <=> $c_a)
+		($c_b||0) <=> ($c_a||0)
 	};
 	my @interesting = sort { $sortfunc->($a, $b) } keys %seen;
 	my %bases;
@@ -3153,6 +3153,7 @@ SQL
 		my @parents;
 		unless ( $item eq '@0' ) {
 			@parents = map {
+				$_->{ref} ||
 				$_->{parent_branchpath}."@".$_->{parent_change}
 			} @{$cp{$item}};
 			if ( !@parents ) {
