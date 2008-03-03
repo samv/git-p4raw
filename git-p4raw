@@ -213,6 +213,7 @@ sub do_load {
 	{
 		@ARGV = @_;
 		getopt("f|force" => \$load_opts{force},
+		       "i|insist" => \$load_opts{all_interesting},
 		      );
 		@_ = @ARGV;
 	}
@@ -259,14 +260,18 @@ SQL
 		@files = grep {
 			if (m{^checkpoint.(\d+).gz} and
 				(($max_journal or $max_checkpoint) or
-				($max_checkpoint and $max_checkpoint > $1))) {
+				($max_checkpoint and $max_checkpoint > $1))
+			    and ! $load_opts{all_interesting}
+			   ) {
 				mutter "excluding $_ - not interesting";
 				();
 			}
 			elsif ( m{^journal.(\d+).gz} and
 				($max_checkpoint && $max_checkpoint > $1 
 				or $max_journal && $max_journal >= $1
-				or $top_checkpoint && $top_checkpoint > $1) ) {
+				or $top_checkpoint && $top_checkpoint > $1)
+				and !$load_opts{all_interesting}
+			      ) {
 				mutter "excluding $_ - not interesting";
 				0;
 			}

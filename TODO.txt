@@ -1,4 +1,7 @@
 
+ - OUCH!  'load' does not import the first journal file after the
+   checkpoint; I had to ram it in this way.
+
  - the change_parents table has a horrid denormalised JSON dump of
    impedence mismatches that is never recalculated unless you delete
    the change_parents row.
