@@ -4148,14 +4148,37 @@ SQL
 select mark from marks where commitid = ?
 SQL
 
+	my $find_change_sth = $dbh->prepare(<<SQL);
+select
+	mark
+from
+	change_branches
+	join change_marks
+		using (branchpath, change)
+	join marks
+		using (mark)
+where
+	branchpath = ? and change = ?
+SQL
+
 	my ($new_marks, $new_parent_normal, $new_parent_ref);
 
 	my $note_commitid = sub {
 		my $branchpath = shift;
 		my $change = shift;
-		$create_bp->($branchpath, $change);
 		my $commitid = shift;
-		my $mark = Q($dbh, $commitid, $select_mark_sth);
+		my $got_bp = Q($dbh, $commitid, $find_commit_sth);
+		if ( $got_bp ) {
+			mutter "skipping $branchpath\@$change; already good";
+			return;
+		}
+		my $mark = Q($dbh, $branchpath, $change, $find_change_sth);
+		if ( $mark ) {
+			warn "$branchpath\@$change already in change_branches, skipping";
+			return;
+		}
+		$create_bp->($branchpath, $change);
+		$mark = Q($dbh, $commitid, $select_mark_sth);
 		if ( !$mark ) {
 			$mark = $new_mark->();
 			$new_marks++;
@@ -4195,7 +4218,7 @@ SQL
 	};
 	my $heads;
 	if ( @_ ) {
-		my $heads = shift;
+		$heads = join " ", @_;
 	}
 	else {
 		$heads = join " ", map { m{(refs/heads/.*)} } `git-show-ref --heads`;
