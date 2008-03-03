@@ -3567,6 +3567,8 @@ use Date::Parse;
 use MooseX::TimestampTZ qw(:all);
 use Time::Local;
 
+use utf8;
+
 our %cast_and_crew = map { m{^\s*(\b.*?\b)\s+<(.*)>} } split /\n/, <<'CAST_AND_CREW';
     Gisle Aas           <gisle@aas.no>
     Kenneth Albanowski  <kjahds@kjahds.com>
@@ -3609,10 +3611,20 @@ our %cast_and_crew = map { m{^\s*(\b.*?\b)\s+<(.*)>} } split /\n/, <<'CAST_AND_C
     Dan Sugalski <dan@sidhe.org>
     Abigail	<abigail@abigail.be>
     Wilson P. Snyder II <unknown@perl.org>
+    Ton Hospel   <perl5-porters@ton.iguana.be>
     Dan Hale            <danhale@us.ibm.com>
     Michael G. Schwern  <schwern@pobox.com>
+    Yitzchak Scott-Thoennes <sthoenna@efn.org>
     Nicholas Clark      <nick@ccl4.org>
     Simon Cozens        <simon.cozens@pembroke.oxford.ac.uk>
+    Vadim Konovalov                 <vkonovalov@lucent.com>
+    Jos I. Boumans                  <kane@xs4all.nl>
+    Ævar Arnfjörð Bjarmason	<avar@cpan.org>
+    Slaven Rezic			<slaven@rezic.de>
+Wolfgang Laun			<Wolfgang.Laun@alcatel.at>
+Richard Foley			<richard.foley@rfi.net>
+Steve Peters			<steve@fisharerojo.org>
+Swbastien Aperghis-Tramoni	<sebastien@aperghis.net>
 CAST_AND_CREW
 $cast_and_crew{"(name lost)"} = '<unknown@unknown>';
 
@@ -3632,9 +3644,16 @@ $cnc_email{'spider-perl@Orb.Nashua.NH.US'} = "Spider Boardman";
 $cnc_email{'abigail@foad.org'} = "Abigail";
 $cnc_email{'Joshua.Pritikin@NewYork2.dmg.deuba.com'} = "Joshua Pritikin";
 $cnc_email{'hv@hugo.hybyte.com'} = 'Hugo van der Sanden';
+$cnc_email{'hv@crypt.org'} = 'Hugo van der Sanden';
 $cnc_email{'nick@talking.bollo.cx'} = 'Nicholas Clark';
 $cnc_email{'nick@bapyhippo.com'} = 'Nicholas Clark';
 $cnc_email{'jhi@cc.hut.fi'} = 'Jarkko Hietaniemi';
+$cnc_email{'jarkko.hietaniemi@nokia.com'} = 'Jarkko Hietaniemi';
+$cnc_email{'kane@dwim.org'} = 'Jos I. Boumans';
+$cnc_email{'avarab@gmail.com'} = 'Ævar Arnfjörð Bjarmason';
+$cnc_email{'richard.foley@ubs.com'} = 'Richard Foley';
+$cnc_email{'sebastien@aperghis.net'} = 'Sébastien Aperghis-Tramoni';
+
 
 sub make_commit {
 	my $desc = shift;
@@ -3672,6 +3691,13 @@ sub make_commit {
 	# if we only see one header, take the author and date
 	# from those messages instead
 	if (@authors == 1 or (set(@authors)->size == 1)) {
+		for ( @authors ) {
+			s{\[at\]}{@}g;
+			s{\*\* .* \*\*}{};
+			s{^.*Konovalov.*}{Vadim Konovalov};
+			s{.*Maddingue.*}{sebastien\@aperghis.net};
+			s{.*Arnfj.*}{avar\@cpan.org};
+		  }
 		$author = [ $authors[0]=~m{([^<]*) <(.*@.*)>} ];
 		$description =~ s{^\s*From.*\Q$authors[0]\E.*\n}{}m;
 		if (!@$author) {
