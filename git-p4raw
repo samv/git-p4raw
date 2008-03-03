@@ -3576,7 +3576,6 @@ our %cast_and_crew = map { m{^\s*(\b.*?\b)\s+<(.*)>} } split /\n/, <<'CAST_AND_C
     Nick Ing-Simmons    <nik@tiuk.ti.com>
     Andreas Koenig      <a.koenig@mind.de>
     Doug MacEachern     <dougm@opengroup.org>
-    Paul Marquess       <pmarquess@bfsec.bt.co.uk>
     Jeff Okamoto        <okamoto@hpcc123.corp.hp.com>
     Ulrich Pfeifer      <pfeifer@charly.informatik.uni-dortmund.de>
     Tom Phoenix         <rootbeer@teleport.com>
@@ -3601,8 +3600,9 @@ our %cast_and_crew = map { m{^\s*(\b.*?\b)\s+<(.*)>} } split /\n/, <<'CAST_AND_C
     Unknown Contributor <gen@atd.rdc.ricoh.co.jp>
     Joshua Pritikin     <joshua.pritikin@db.com>
     Kurt D. Starsinic   <kstar@chapin.edu>
-    Dan Sugalski <sugalskd@osshe.edu>
+    Dan Sugalski <dan@sidhe.org>
     Abigail	<abigail@abigail.be>
+    Wilson P. Snyder II <unknown@perl.org>
 CAST_AND_CREW
 $cast_and_crew{"(name lost)"} = '<unknown@unknown>';
 
@@ -3614,6 +3614,10 @@ $cnc_email{'abigail@fnx.com'} = "Abigail";
 $cnc_email{'kstar@O2.chapin.edu'} = "Kurt D. Starsinic";
 $cnc_email{'kstar@www.chapin.edu'} = "Kurt D. Starsinic";
 $cnc_email{'SYSTEM@cedar.osshe.edu'} = "Dan Sugalski";
+$cnc_email{'hansm@icgroup.nl'} = "Hans Mulder";
+$cnc_email{'sugalskd@osshe.edu'} = "Hans Mulder";
+$cnc_email{'paul.marquess@bt.com'} = "Paul Marquess";
+$cnc_email{'spider-perl@Orb.Nashua.NH.US'} = "Spider Boardman";
 $cnc_email{'Joshua.Pritikin@NewYork2.dmg.deuba.com'} = "Joshua Pritikin";
 
 sub make_commit {
@@ -3627,11 +3631,13 @@ sub make_commit {
 	my $description = $desc->{description};
 
 	# some perl-specific touch-ups
+	$DB::single = 1;
 	my @authors = $description =~ m{^\s*From:\s*(.*\S)\s*$}mg;
 	my @dates   = $description =~ m{^\s*Date:\s*(.*)}mg;
 	my @subjects = $description =~ m{^\s*(?:Subject|Title):\s*(.*)}mg;
 
 	for ( @authors ) {
+		s{^\s*<(.*)>\s*$}{$1};
 		while ( s{^(.*?)\ and\ (.*)}{$2} ) {
 			push @authors, $1;
 		}
@@ -3649,7 +3655,7 @@ sub make_commit {
 
 	# if we only see one header, take the author and date
 	# from those messages instead
-	if (@authors == 1) {
+	if (@authors == 1 or (set(@authors)->size == 1)) {
 		$author = [ $authors[0]=~m{([^<]*) <(.*@.*)>} ];
 		$description =~ s{^\s*From.*\Q$authors[0]\E.*\n}{}m;
 		if (!@$author) {
@@ -3664,7 +3670,8 @@ sub make_commit {
 						($authors[0], $cast_and_crew{$authors[0]});
 				}
 				else {
-					barf "Failed to guess what $authors[0] is"
+					moan "Failed to guess what $authors[0] is";
+					@$author = ($authors[0]) x 2;
 				}
 			}
 		}
@@ -3692,7 +3699,7 @@ sub make_commit {
 	}
 
 	if ( @subjects == 1 ) {
-		if ( $description =~ m{^\s*(From|Subject|Title|Date):} ) {
+		if ( $description =~ m{^\s*(From|Subject|Title|Date|Message-?Id|To|Cc):}i ) {
 			$DB::single = 1;
 			$description = "$subjects[0]\n\n".$description;
 			$description =~ s{^\s*(Subject|Title):.*\n}{}m;
@@ -3814,7 +3821,7 @@ sub do_unexport_commits {
 	$dbh->do("delete from change_marks where change between ? and ?",
 		 undef,
 		 $export_opts{min},
-		 $export_opts{max});
+		 $export_opts{max}) or barf "query failed: ".$dbh->errstr;
 	my $branches = change_branches_iter
 		($dbh, $export_opts{min}-1, "max", {commits => 1});
 	my $moved;
