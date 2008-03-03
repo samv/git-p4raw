@@ -3591,6 +3591,7 @@ our %cast_and_crew = map { m{^\s*(\b.*?\b)\s+<(.*)>} } split /\n/, <<'CAST_AND_C
     Larry W. Virden     <lvirden@cas.org>
     Jarkko Hietaniemi   <Jarkko.Hietaniemi@cc.hut.fi>
     Helmut Jarausch     <helmutjarausch@unknown>
+    Mark-Jason Dominus  <mjd@plover.com>
     Hugo van der Sanden <hv@crypt.compulink.co.uk>
     Tom Phoenix (with help from M.J.T. Guy  <tomphoenix@unknown>
     Nat Torkington      <gnat@frii.com>
@@ -3603,6 +3604,10 @@ our %cast_and_crew = map { m{^\s*(\b.*?\b)\s+<(.*)>} } split /\n/, <<'CAST_AND_C
     Dan Sugalski <dan@sidhe.org>
     Abigail	<abigail@abigail.be>
     Wilson P. Snyder II <unknown@perl.org>
+    Dan Hale            <danhale@us.ibm.com>
+    Michael G. Schwern  <schwern@pobox.com>
+    Nicholas Clark      <nick@ccl4.org>
+    Simon Cozens        <simon.cozens@pembroke.oxford.ac.uk>
 CAST_AND_CREW
 $cast_and_crew{"(name lost)"} = '<unknown@unknown>';
 
@@ -3614,11 +3619,17 @@ $cnc_email{'abigail@fnx.com'} = "Abigail";
 $cnc_email{'kstar@O2.chapin.edu'} = "Kurt D. Starsinic";
 $cnc_email{'kstar@www.chapin.edu'} = "Kurt D. Starsinic";
 $cnc_email{'SYSTEM@cedar.osshe.edu'} = "Dan Sugalski";
+$cnc_email{'dsugalski@northernlight.com'} = "Dan Sugalski";
 $cnc_email{'hansm@icgroup.nl'} = "Hans Mulder";
 $cnc_email{'sugalskd@osshe.edu'} = "Hans Mulder";
 $cnc_email{'paul.marquess@bt.com'} = "Paul Marquess";
 $cnc_email{'spider-perl@Orb.Nashua.NH.US'} = "Spider Boardman";
+$cnc_email{'abigail@foad.org'} = "Abigail";
 $cnc_email{'Joshua.Pritikin@NewYork2.dmg.deuba.com'} = "Joshua Pritikin";
+$cnc_email{'hv@hugo.hybyte.com'} = 'Hugo van der Sanden';
+$cnc_email{'nick@talking.bollo.cx'} = 'Nicholas Clark';
+$cnc_email{'nick@bapyhippo.com'} = 'Nicholas Clark';
+$cnc_email{'jhi@cc.hut.fi'} = 'Jarkko Hietaniemi';
 
 sub make_commit {
 	my $desc = shift;
