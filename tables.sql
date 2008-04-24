@@ -6,19 +6,32 @@ create table int_type (
 );
 
 insert into int_type values
-	(0, 'merge from',    'change copied from subj. to obj.'),
-	(1, 'merge into',    'change copied from obj. to subj.'),
-	(2, 'branch from',   'revision copied from obj. to subj.'),
-	(3, 'branch into',   'revision copied from subj. to obj.'),
-	(4, 'copy from',     'patch copied from obj. to subj ??'),
-	(5, 'copy into',     'patch copied from subj. to obj ??'),
-	(6, 'ignored',       'patch from obj. were ignored by subj.'),
-	(7, 'ignored by',    'patch from subj. were ignored by obj.'),
-	(8, 'delete from',   'patch marked reverted??'),
-	(9, 'delete into',   'patch marked reverted??'),
-	(10, 'edit into',    'patch picked but altered??'),
-	(11, 'edit from',    'patch poked but altered??'),
-	(12, 'edit from',    'patch picked but altered from obj to subj.'),
+	(0, 'merge from',    'change copied from subj. to obj.');
+insert into int_type values
+	(1, 'merge into',    'change copied from obj. to subj.');
+insert into int_type values
+	(2, 'branch from',   'revision copied from obj. to subj.');
+insert into int_type values
+	(3, 'branch into',   'revision copied from subj. to obj.');
+insert into int_type values
+	(4, 'copy from',     'patch copied from obj. to subj ??');
+insert into int_type values
+	(5, 'copy into',     'patch copied from subj. to obj ??');
+insert into int_type values
+	(6, 'ignored',       'patch from obj. were ignored by subj.');
+insert into int_type values
+	(7, 'ignored by',    'patch from subj. were ignored by obj.');
+insert into int_type values
+	(8, 'delete from',   'patch marked reverted??');
+insert into int_type values
+	(9, 'delete into',   'patch marked reverted??');
+insert into int_type values
+	(10, 'edit into',    'patch picked but altered??');
+insert into int_type values
+	(11, 'edit from',    'patch poked but altered??');
+insert into int_type values
+	(12, 'edit from',    'patch picked but altered from obj to subj.');
+insert into int_type values
 	(13, 'edit into',    'patch picked but altered from subj to obj.');
 
 -- integration history (branch/merge/ignore)
@@ -79,10 +92,14 @@ create table change_type (
 );
 
 insert into change_type values
-	(0, 'add',       'File added to repository'),
-	(1, 'edit',      'File modified'),
-	(2, 'delete',    'File removed'),
-	(3, 'branch',    'File copied from another location'),
+	(0, 'add',       'File added to repository');
+insert into change_type values
+	(1, 'edit',      'File modified');
+insert into change_type values
+	(2, 'delete',    'File removed');
+insert into change_type values
+	(3, 'branch',    'File copied from another location');
+insert into change_type values
 	(4, 'integrate', 'File metadata and/or contents changed');
 
 -- change inventories for revisions
