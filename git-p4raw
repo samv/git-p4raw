@@ -5440,6 +5440,12 @@ insert into change_parents
 values
 	(?, ?, ?)
 SQL
+	my $delete_change_parents = $dbh->prepare(<<SQL);
+delete from change_parents
+where
+	branchpath = ? and change = ?
+SQL
+
 	my $select_mark_sth = $dbh->prepare(<<SQL);
 select mark from marks where commitid = ?
 SQL
@@ -5484,6 +5490,10 @@ SQL
 		#$DB::single = 1;
 		$insert_change_mark_sth->execute
 			($branchpath, $change, $mark);
+		# assume all previous change_parent rows for this
+		# change/bp are bogus
+		$delete_change_parents->execute
+			($branchpath, $change);
 		while ( my $parent = shift ) {
 			my ($p_branchpath, $p_change, $found )
 				= Q( $dbh, $parent, $find_commit_sth );
