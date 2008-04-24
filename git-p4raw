@@ -3550,11 +3550,11 @@ SQL
 			while ( my $x = $possible->() ) {
 				push @possible, $x;
 			}
-			if ( not @possible ) {
-				moan "can't link to $link (unknown)";
-				next;
-			}
 			my $replacement = "";
+			if ( not @possible ) {
+				$replacement = "(not found)"
+			}
+			else {
 			for my $who ( @possible ) {
 				$replacement .=
 					("on $who->{branchpath}: "
@@ -3570,6 +3570,7 @@ SQL
 					);
 
 			}
+		}
 			$$desc =~ s{YYY\Q$link\EYYY}{$replacement};
 		}
 	}
