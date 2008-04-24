@@ -5402,7 +5402,12 @@ sub do_recover {
 	my $create_sth = $dbh->prepare(<<SQL);
 insert into change_branches (branchpath, change) values (?, ?)
 SQL
-	my $create_bp = sub { $create_sth->execute(@_) };
+	my $check_cb_sth = $dbh->prepare(<<SQL);
+select count(*) from change_branches where branchpath = ? and change = ?
+SQL
+	my $create_bp = sub { $check_cb_sth->execute(@_);
+		my ($c) = $check_cb_sth->fetchrow_array;
+		if (!$c) { $create_sth->execute(@_) } };
 	my $mark_sth = $dbh->prepare(<<SQL);
 select nextval('gfi_mark');
 SQL
