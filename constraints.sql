@@ -1,13 +1,45 @@
 
+-- adding constraints pertaining to datafile load state
+alter table source_file add constraint source_file_id_valid
+      foreign key (source_file_id) references source_filename;
+
+-- *sigh* and the rest
+alter table integed add constraint source_file_id_valid
+      foreign key (source_file_id) references source_filename;
+alter table p4user add constraint source_file_id_valid
+      foreign key (source_file_id) references source_filename;
+alter table change add constraint source_file_id_valid
+      foreign key (source_file_id) references source_filename;
+alter table change_desc add constraint source_file_id_valid
+      foreign key (source_file_id) references source_filename;
+alter table revcx add constraint source_file_id_valid
+      foreign key (source_file_id) references source_filename;
+alter table rev add constraint source_file_id_valid
+      foreign key (source_file_id) references source_filename;
+alter table label add constraint source_file_id_valid
+      foreign key (source_file_id) references source_filename;
+alter table marks add constraint source_file_id_valid
+      foreign key (source_file_id) references source_filename;
+alter table depot add constraint source_file_id_valid
+      foreign key (source_file_id) references source_filename;
+alter table rev_marks add constraint source_file_id_valid
+      foreign key (source_file_id) references source_filename;
+alter table change_branches add constraint source_file_id_valid
+      foreign key (source_file_id) references source_filename;
+alter table change_marks add constraint source_file_id_valid
+      foreign key (source_file_id) references source_filename;
+alter table change_parents add constraint source_file_id_valid
+      foreign key (source_file_id) references source_filename;
+
 -- checking all change number references are valid
 alter table rev add constraint rev_change_valid
-      foreign key (change) references change;
+      foreign key (change) references change deferrable;
 
 alter table revcx add constraint revcx_change_valid
-      foreign key (change) references change;
+      foreign key (change) references change deferrable;
 
 alter table change_branches add constraint change_branches_change_valid
-      foreign key (change) references change;
+      foreign key (change) references change deferrable;
 
 -- p4users primary key
 alter table p4user
@@ -22,27 +54,27 @@ select * from change_desc where not exists
 
 -- checking all depotpaths + revnums are valid
 alter table revcx add constraint revcx_depot_rev_valid
-      foreign key (depotpath, revision) references rev;
+      foreign key (depotpath, revision) references rev deferrable;
 alter table rev_marks add constraint rev_marks_depot_rev_valid
-      foreign key (depotpath,revision) references rev;
+      foreign key (depotpath,revision) references rev deferrable;
 
 -- set up safety constraints for later additions
 alter table change_marks add constraint change_marks_branch_valid
-      foreign key (branchpath,change) references change_branches;
+      foreign key (branchpath,change) references change_branches deferrable;
 
 create unique index change_parents_unique on change_parents
 	(branchpath,change,parent_branchpath,parent_change,ref);
 alter table change_parents add constraint change_branchpath_valid
       foreign key (branchpath,change)
-      references change_branches;
+      references change_branches deferrable;
 alter table change_parents add constraint change_parents_valid
       foreign key (parent_branchpath, parent_change)
-      references change_branches(branchpath, change);
+      references change_branches(branchpath, change) deferrable;
 create unique index change_parents_sanity
        on change_parents(change, branchpath, parent_branchpath,
        parent_change, manual);
 
--- create indexes
+-- create indexes:
 create index integed_change_idx on integed (change);
 create index integed_subject_idx on integed (subject, subject_maxrev);
 create index integed_object_idx on integed (object, object_maxrev);
@@ -67,7 +99,7 @@ group by
 
 -- checking all change number references are valid
 alter table change add constraint change_who_user_valid
-      foreign key (who_user) references p4user;
+      foreign key (who_user) references p4user deferrable;
 
 -- the 'integed' table is denormalised, with rows normally appearing
 -- in pairs.  However, these rows were missing their partners:

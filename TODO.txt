@@ -45,9 +45,6 @@ git-log utsl/p4/lexwarn/perl utsl/p4/mainline/perl utsl/p4/maint-5.004/perl utsl
    rm -r .git/refs/heads/p4
    git-p4raw show-branches 138 | sed 's!//depot!refs/heads/p4!' | while read ref x commit; do git-update-ref $ref $commit; done
 
- - there should be an "info" command which summarises what has been
-   imported and converted so far.
-
  - refactoring:
 
    - getopt fragment used by many commands for subcommand argument

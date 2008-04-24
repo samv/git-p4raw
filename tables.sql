@@ -1,10 +1,30 @@
+-- git-p4raw state
+
+-- Note that the order of columns in here is important; it must match
+-- the Perforce checkpoint/journal format.
+
+-- tag every row with a source file, but factor these out
+create table source_filename (
+    source_file_id serial primary key,
+    source_file text
+);
+
+create table source_file (
+    source_file_id  integer,
+    source_file_max integer
+);
+
 -- lookup table - integration types
 create table int_type (
     int_type int not null primary key,
     title text,
     description text
 );
-
+  
+-- some integration types which I have yet to fully decypher; however,
+-- I considered their variation relatively disinteresting historically
+-- as it is derivable.  So, these are for display and possible use as
+-- comments as seen fit.
 insert into int_type values
 	(0, 'merge from',    'change copied from subj. to obj.');
 insert into int_type values
@@ -35,8 +55,11 @@ insert into int_type values
 	(13, 'edit into',    'patch picked but altered from subj to obj.');
 
 -- integration history (branch/merge/ignore)
+--
+-- This is the meat of the metadata, really.  We index 12 distinct
+-- varieties of crap out of this once it's loaded, and end up querying
+-- it a lot.
 create table integed (
-    source_file text not null,
     subject text not null,	-- what file this log refers to
     object  text not null,	-- file the record refers to in objective
     object_minrev int not null,	-- objective revisions range - lower bound
@@ -46,10 +69,11 @@ create table integed (
     int_type int not null references int_type,
     change int not null,	-- Change this occurred in
     primary key (change, subject, subject_maxrev, object, object_maxrev)
-);
+) inherits (source_file);
 
+-- users.  This is easily supplanted with a 'p4raw-extra-users.csv' if
+-- seen fit.
 create table p4user (
-    source_file text not null,
     who_user text, -- username
     email text,    -- e-mail address
     junk text,     -- always empty?
@@ -60,11 +84,11 @@ create table p4user (
     alwayzero1 int,-- ???
     dunno2 text,   -- ???
     alwayzero2 int -- ???
-);
+) inherits (source_file);
 
+-- A row in each of these for the change
 -- change master records
 create table change (
-    source_file text not null,
     change int not null primary key,
     change_desc_id int,	-- this almost always contained the same value as
 			-- 'change', or a dead revision.  The one time it
@@ -73,16 +97,15 @@ create table change (
     who_host text,
     who_user text,
     change_time int, 	-- epoch time of change
-    closed int,		-- whether this change is committed yet jjjjjjj
+    closed int,		-- whether this change is committed yet
     short_desc text     -- short description of change
-);
+) inherits (source_file);
 
 -- change description table
 create table change_desc (
-    source_file text not null,
        change_desc_id INT not null primary key,
        description TEXT
-);
+) inherits (source_file);
 
 -- change types
 create table change_type (
@@ -104,23 +127,23 @@ insert into change_type values
 
 -- change inventories for revisions
 create table revcx (
-    source_file text not null,
        change int not null,	-- change this occurred in
        depotpath text,		-- what changed
        primary key (change, depotpath),
        revision int,		-- new file revision (#number)
        change_type int REFERENCES change_type
-);
+) inherits (source_file);
 
-
+-- p4 also has a revdx, revhx which presumably correspond to many of
+-- the indexes that we create (see constraints.sql), as their data
+-- does not appear in the checkpoints or journal files.
 
 -- detail on depot RCS files
 create table rev (
-    source_file text not null,
        depotpath TEXT,
        revision INT,
        primary key (depotpath, revision),
-       file_type INT,	-- type;
+       file_type INT,	-- type; generally ignored by this tool, save execute
        		 -- 0 0000 0000 0000 - text
        		 -- 0 0010 0000 0000 - xtext (executable bit set)
        		 -- 0 0000 0010 0000 - ktext (keyword expansion)
@@ -133,29 +156,26 @@ create table rev (
        		 -- 0 0100 0000 0000 - symlink
        rev_change_type INT,
        change INT NOT NULL,
-       useless_epoch1 INT,
+       useless_epoch1 INT, -- who cares :)
        useless_epoch2 INT,
        revision_md5 TEXT,
        unknown INT,
        rcs_file TEXT,
        rcs_revision VARCHAR(10),
-       checkout_type INT
-);
--- we ignore 'revdx'; doesn't look to be any useful information there.
+       checkout_type INT   -- this name is a guess.
+) inherits (source_file);
 
 -- tags
 create table label (
-    source_file text not null,
        tagname TEXT not null,
        depotpath TEXT not null,
        primary key (tagname, depotpath),
        revision int NOT NULL       
-);
+) inherits (source_file);
 
 -- this table holds the marks that we send to git fast-import
 create sequence gfi_mark;
 create table marks (
-    source_file text not null default 'new',
 	mark int not null primary key,
 	commitid char(40) null,
 	blobid char(40) null,
@@ -163,52 +183,58 @@ create table marks (
 		(commitid is not null) OR
 		(blobid is not null)
 	)
-);
+) inherits (source_file);
+
+-- this table obviously lists the "depots", but this tool doesn't
+-- currently do much sensible with this information.
+create table depot (
+	depot TEXT not null primary key,
+	num1 int not null,
+	string1 text,
+	pathspec text
+) inherits (source_file);
 
 -- mapping file revisions to marks - join with marks to get blobids
 create table rev_marks (
-    source_file text not null default 'new',
 	depotpath TEXT not null,
 	revision int not null,
 	primary key (depotpath,revision),
 	mark int not null references marks DEFERRABLE INITIALLY DEFERRED
-);
+) inherits (source_file);
 
 -- what branches we determined exist along the way
 create table change_branches (
-    source_file text not null default 'new',
        branchpath TEXT not null,
        change INT null,
        primary key (branchpath, change)
-);
+) inherits (source_file);
 
 -- mapping changes to branches and marks - join with marks to get
 -- commitids
 create table change_marks (
-    source_file text not null default 'new',
 	branchpath TEXT not null,
 	change int not null,
 	primary key (branchpath, change),
-	mark int not null references marks DEFERRABLE INITIALLY DEFERRED,
-	unique (mark)
-);
+	mark int not null references marks DEFERRABLE INITIALLY DEFERRED
+	-- unique (mark)
+) inherits (source_file);
 
--- parentage of changes
+-- parentage of changes.  There are actually two types of fact
+-- disguised in this one table.  I don't use inheritance because Pg's
+-- inherited tables don't inherit constraints!
 create table change_parents (
-    source_file text not null default 'new',
 	branchpath TEXT not null,
 	change int not null,
 
+	-- a parent exists of a branchpath/change,
 	parent_branchpath TEXT null,
 	parent_change int null,
 
+	-- OR an explicit reference is given (anything that will 'git
+	-- rev-parse')
 	ref TEXT null,
-	manual boolean NOT NULL default true,
-	all_headrev boolean NULL,
-	none_unseen boolean NULL,
-	octopus boolean NOT NULL DEFAULT false,
-	evil boolean NOT NULL default false,
 
+	-- enforce this rule
 	CHECK (
 		((parent_change is not null and parent_branchpath is not null)
 		 AND
@@ -218,65 +244,17 @@ create table change_parents (
 		 (ref is not null))
 	),
 
-	-- zomg no .. he's not going to put JSON in there is he?
-	json_info TEXT
-);
+	-- presence of data in this column invalidates all the rows
+	-- that don't have it.  This hack should be do-away-able once
+	-- "p4raw dump" knows how to save row deletes.
+	manual boolean NOT NULL default true,
 
--- TODO create language 'plperl';
+	-- These were all information which was derived, and should be
+	-- removed.
+	all_headrev boolean NULL,
+	none_unseen boolean NULL,
+	octopus boolean NOT NULL DEFAULT false,
+	evil boolean NOT NULL default false,
+	json_info text
 
--- this is a memoization that will be important.
--- TODOcreate table merge_bases (	
--- TODO	left_branch TEXT not null,
--- TODO	left_change int not null,
--- TODO	foreign key (branchpath, change)
--- TODO		references change_branches (branchpath,change)
--- TODO		on delete cascade,
--- TODO	
--- TODO	right_branch TEXT not null,
--- TODO	right_change int not null,
--- TODO	foreign key (branchpath, change)
--- TODO		references change_branches (branchpath,change)
--- TODO		on delete cascade,
--- TODO	
--- TODO	base_branch TEXT not null,
--- TODO	base_change int not null,
--- TODO	foreign key (branchpath, change)
--- TODO		references change_branches (branchpath,change)
--- TODO		on delete cascade,
--- TODO
--- TODO	CHECK (
--- TODO		CASE WHEN
--- TODO			(left_change = right_change)
--- TODO		THEN 
--- TODO			(left_branch < right_branch)
--- TODO		ELSE
--- TODO			(left_change < right_change)
--- TODO		END
--- TODO	),
--- TODO	CHECK (
--- TODO		base_change <= right_change or
--- TODO		base_change <= left_change
--- TODO	)
--- TODO);
--- TODO
--- TODOcreate function find_merge_base(text, int, text, int) returns bool AS $$
--- TODO	my ($left_bp, $left_chg, $right_bp, $right_chg) = @_;
--- TODO
--- TODO	my $sth = spi_prepare
--- TODO		("select * from change_parents where "
--- TODO       		."branchpath = ? and change = ? order by manual desc");
--- TODO	
--- TODO	my @start = map { join '@', @$_ }
--- TODO		[$left_bp,$left_chg], [$right_bp, $right_chg];
--- TODO
--- TODO$$ language 'plperl';
--- TODO
--- TODOcreate function find_merge_branch(text, int, text, int) returns text AS $$
--- TODO
--- TODO
--- TODO$$ language 'plperl';
--- TODO
--- TODOcreate function find_merge_branch(text, int, text, int) returns text AS $$
--- TODO
--- TODO
--- TODO$$ language 'plperl';
+) inherits (source_file);
