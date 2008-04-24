@@ -2729,18 +2729,29 @@ sub gfi_data {
 	print GFI $$buf, "\n";
 }
 
+sub gfi_utf8_data {
+	my $buf = shift;
+	my $l = utf8::upgrade($$buf);
+	print GFI "data $l\n";
+	binmode GFI, ":utf8";
+	print GFI $$buf, "\n";
+	binmode GFI;
+}
+
 sub gfi_start_commit {
 	my $dbh = shift;
 	my $mark = gfi_get_mark($dbh, "commit");
 	my $ref = shift;
 	my $author = shift;
 	my $committer = shift;
+	binmode GFI, ":utf8";
 	print GFI "commit ", $ref, "\n";
 	print GFI "mark :", $mark, "\n";
 	print GFI "author ", $author->[0], " <", $author->[1], "> ",
 		$author->[2], "\n" if $author;
 	print GFI "committer ", $committer->[0], " <", $committer->[1], "> ",
 		$committer->[2], "\n";
+	binmode GFI;
 	return $mark;
 }
 
@@ -3438,7 +3449,7 @@ SQL
 		my $mark = gfi_start_commit
 			($dbh, $ref, $author, $committer);
 		$cb_marks{$bp}{$change} = $mark;
-		gfi_data(\$description);
+		gfi_utf8_data(\$description);
 		$insert_commit_mark_sth->execute($bp, $change, $mark);
 
 		# write out the parents
