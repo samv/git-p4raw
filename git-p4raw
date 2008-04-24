@@ -5142,7 +5142,7 @@ sub do_unexport_commits {
 		mutter "deleting: @{[keys %current]}";
 		for my $dp ( keys %current ) {
 			my $rc = run_err qw(git update-ref), "-d",
-				_path2ref($dp), $current{$dp}{commit};
+				_path2ref($dp), $current{$dp}{commitid};
 			moan "failed to delete ref "._path2ref($dp);
 		}
 	}
