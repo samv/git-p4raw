@@ -18,7 +18,7 @@ use Digest::SHA1;
 use Digest::MD5 qw(md5_hex);
 use Text::Wrap;
 $Text::Wrap::columns = 72;
-use JSON;
+use JSON 1.15;
 use YAML;
 use Encode;
 BEGIN { eval "use Term::ProgressBar" };
