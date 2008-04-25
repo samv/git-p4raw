@@ -1444,7 +1444,7 @@ THIS
 			push @extra_per_src,
 				(manual => 1,
 				 (keys %unseen
-				  ? (json_info => objToJson
+				  ? (json_info => to_json
 				     ({omitted=>[grep { $omitted{$_} }
 						 keys %omitted],
 				       curious=>[grep { $curious{$_} }
@@ -1463,7 +1463,7 @@ THIS
 	}
 	for my $p ( @parents ) {
 		if ( @ignored and !$p->{json_info} ) {
-			$p->{json_info}=objToJson{integrated=>{@ignored}};
+			$p->{json_info}=to_json{integrated=>{@ignored}};
 		}
 		$callback->( ($manual and !$p->{manual})
 			     ? {%$p} : $p );
@@ -1837,7 +1837,7 @@ SQL
 			 "\n");
 		if ( $row->{json_info} ) {
 			print map { $_, "\n" }
-				show_juice($row, jsonToObj($row->{json_info}));
+				show_juice($row, from_json($row->{json_info}));
 		}
 	};
 
@@ -5023,7 +5023,7 @@ sub make_commit {
 		if ( $p->{json_info} and
 		     (!$last or $p->{json_info} ne $last)) {
 			$last = $p->{json_info};
-			my $oj = jsonToObj($p->{json_info});
+			my $oj = from_json($p->{json_info});
 			push @notes, show_juice($p, $oj);
 		}
 	}
