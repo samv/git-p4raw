@@ -5875,6 +5875,9 @@ explanation of 'find-branches', above).
 
 =head3 export common options
 
+These options apply to 'find-branches', 'export', 'export-blobs and
+'export-commits'.
+
 =over
 
 =item C<-n=INT>
@@ -5886,7 +5889,9 @@ Size of a "chunk" for export.
 Specify the delta depth.  If you are working on projects with a long
 history this can save a lot of space.  Good for archives of old history.
 
-=item  
+=item C<-a>, C<--automatic>
+
+Skip questions relating to find-branches decisions (see above).
 
 =back
 
@@ -6092,7 +6097,99 @@ like cherry picking).
 #   cperl-continued-statement-offset: 8
 # End:
 
-=head1 OTHER FIX-UPS
+=head1 HINTS AND TRICKS
+
+=head2 Game plan.
+
+First check that you have a perforce directory, with F<db.*> files and
+a C<depot> directory.  Check if there are any F<checkpoint.*.gz>
+files, and any F<journal.*.gz> files.
+
+If not, you need to start the C<p4d> server and checkpoint.  With a
+correctly running server, this command will do this:
+
+  p4 admin checkpoint
+
+(See
+L<http://public.perforce.com/public/perforce/faq/admin.html#backups> -
+if you weren't already doing this "every week", then you can consider
+yourself very, very naughty).
+
+So, then you load the data.  On the first load, don't interrupt the
+run.
+
+  git-p4raw load
+
+You must then check the loaded data, and add indexes.  Note: if this
+takes a lot of time, then consider whether you need to increase your
+Postgres' shared buffer and sort memory settings.
+
+  git-p4raw check
+
+It should hopefully prompt for anything important.  You can re-run
+this safely, and if you answer any questions it will save the answers
+to be loaded next time you run C<load>.
+
+If you are in a hurry, you can try C<git-p4raw export> straight away.
+However, for larger repositories, it is worth breaking it down
+further.
+
+First of all, bite off a small piece near the beginning of the
+repository, and export all its blobs to git.  This part should be
+fairly robust, and is quite speedy too.
+
+  git-p4raw export-blobs -n 5000
+
+Then find the branches for that chunk:
+
+  git-p4raw find-branches -l 1..5000
+
+You will be asked questions about every 'dodgy'-looking integration,
+where it was not clear whether it was what would be considered by git
+to be a merge or not.  This stage is slow; it is still the prototype
+implementation which emerged from exploring the data.  With re-writing
+it could become much faster; see TODO.txt in the distribution for
+hints.
+
+With C<-a>, you are not asked any decisions about this, and a set of
+fudge factors are employed instead.
+
+Once you have found the branches, you can export them with:
+
+  git-p4raw export-commits 1..5000
+
+And then take a look with C<gitk --all> or something like that.  The
+things to watch out for include commits with very long sets of
+'C<p4-integed:>' breadcrumbs: these all represent conversion
+'impedance mismatches', such as a merge which didn't quite merge
+everything, or a cherry pick.
+
+You can undo the last part of the process with:
+
+  git-p4raw unexport-commits 2500
+
+Would delete all commits higher than and including #2500.
+
+If you want to also throw away the results of the C<find-branches>
+step, then use:
+
+  git-p4raw lose-branches 2500
+
+Then you can use C<git-p4raw describe N> to poke around, and perhaps
+use C<git-p4raw graft> to attach history which you may have manually
+prepared, or to correct parenting decision mistakes (this is described
+below).
+
+Another useful command is C<git-p4raw recover>, which will take a set
+of git commits, and recover C<change_branches> and C<change_parents>
+rows from them.  This can be useful if you ran C<drop> and are
+starting from scratch.  The options to C<recover> are git revisions:
+
+  git-p4raw recover --all
+
+Currently, C<recover> is not capable of building data for all tables;
+just the C<change_branches> and C<change_parents> tables are
+recovered.
 
 =head2 Correcting branch decisions
 
@@ -6166,4 +6263,18 @@ this, insert into the change_marks and marks tables.
 
 This is useful for grafting the first change on from any pre-perforce
 archaeological remains that your project might have.
+
+=head2 Errata: watch out for gfi_mark > 1_048_576
+
+I encountered a bug with C<git-fast-import> where with an export mark
+ID over 1Mi (1024 * 1024), the mark numbers output by
+C<git-fast-import> did not bear any relation to the ones I put in.
+This caused all exports to wait forever for the marks it was expecting
+to be written.
+
+In this case, I simply dropped the index, deleted all of the C<marks>
+rows (using C<truncate marks cascade;>), re-ran C<export-blobs>, and
+used C<recover> to read back in all the work that had been done.
+
+=cut
 
