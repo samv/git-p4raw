@@ -5625,6 +5625,11 @@ the target git repository is, or which Postgres database to use, this
 is configured in the normal way with environment variables
 (C<GIT_DIR>, C<PGDATABASE>, etc).
 
+All git-p4raw operations are interruptible, apart from the initial
+bulk load (as intermediate commits are made).  There is also a
+C<recover> command, which currently recovers the work done by
+C<find-branches> from already exported commits.
+
 =head1 COMMAND LINE OPTIONS
 
 =over
@@ -5708,6 +5713,58 @@ automatically re-loaded if you run C<load> again without arguments).
 (TODO - some inconsistencies such as missing integration records are
 not dealt with, and may require manual patching or use of the C<graft>
 command, below)
+
+=item C<git-p4raw describe N>
+
+Show change N vital statistics (TODO: post-conversion, mapped git
+commits), and the files that were modified in that change.  A bit like
+C<p4 describe -s> or C<git show --stat>.
+
+This command performs a fairly mammoth query to determine whether
+changes with lots of "integrate" changes look enough like a
+cross-merge to be represented as such.  This works by looking at the
+revisions of the source paths for 'integrate' changes, and then
+finding out if any of those paths have new revisions between the one
+that was 'integrated' and the change number in question.  It then
+lists the change numbers that the revisions being integrated came
+from, or "HEAD" if that was the most recent revision on that branch at
+that time.  Thus, if you see output like this:
+
+ On path //depot/perl,
+         delete from //depot/relperl (HEAD), 27 file(s)
+         branch from //depot/relperl (HEAD), 291 file(s)
+         integrate from //depot/relperl (HEAD), 392 file(s)
+
+Then the integration information does not contradict the assertion
+that the change in question is a cross-merge from F<//depot/relperl>
+to F<//depot/perl>.
+
+However, this is not yet quite enough to prove that the integration
+information in the change is a cross-merge; we also need to show that
+there are changes between the I<merge base> of the two branches that
+could have been merged, but are not mentioned.  So, if there are any
+merge candidates they are all inspected to see if there are any files
+which were not merged.  The results are totalled up and displayed.  If
+you add C<-w> to the C<describe> command, then it will save the
+information in the C<grafts> table.
+
+=item C<git-p4raw find-branches [-a] [STARTREV[..REV]]>
+
+Scan the changes from STARTREV to REV and try to find branches.
+
+This command is equivalent to running C<git-p4raw describe N -w>
+successively for each change.
+
+With C<--automatic> (C<-a> for short), the questions about whether to
+treat partial integration as a merge or not will not be asked.
+Instead, a set of built-in fudge values will be used.  Tune in the
+source to taste.
+
+This is normally the most time-consuming part of the export, and it is
+quite important for a good conversion that this is making good
+decisions.  If you run C<export-blobs> first, then it might end up
+making better decisions - especially if there were files which did not
+have MD5 sums in their C<rev> record in perforce.
 
 =item C<git-p4raw graft { -d change | [ -a ] change change ... }> (TODO)
 
@@ -5796,8 +5853,6 @@ An example interactive session:
 
 =cut
 
-=item C<git-p4raw export [ CHG[..CHG] | -n NUM ]>
-
 =item C<git-p4raw export-blobs [ CHG[..CHG] | -n NUM ]>
 
 =item C<git-p4raw export-commits [ CHG[..CHG] | -n NUM ]>
@@ -5811,6 +5866,12 @@ If you start C<git fast-import>, you must take care to pass
 C<--export-marks> to it if you want to perform subsequent import runs.
 Also you will need to remove the foreign key constraints on rev_marks
 and change_marks.
+
+=item C<git-p4raw export [ -a ] [ CHG[..CHG] | -n NUM ]>
+
+This command is a shortcut for 'export-blobs', 'find-branches' and
+'export-commits'.  Use C<-a> to skip all questions (see the
+explanation of 'find-branches', above).
 
 =head3 export common options
 
@@ -5846,52 +5907,6 @@ number.  There may be more than one if the change affected multiple
 branches.  This command will be modelled on C<git-svn find-rev>, so
 also be capable of showing the Perforce change number from a git
 commit ID.  Currently this only looks at information in the database.
-
-=item C<git-p4raw describe N>
-
-Show change N vital statistics (TODO: post-conversion, mapped git
-commits), and the files that were modified in that change.  A bit like
-C<p4 describe -s> or C<git show --stat>.
-
-This command performs a fairly mammoth query to determine whether
-changes with lots of "integrate" changes look enough like a
-cross-merge to be represented as such.  This works by looking at the
-revisions of the source paths for 'integrate' changes, and then
-finding out if any of those paths have new revisions between the one
-that was 'integrated' and the change number in question.  It then
-lists the change numbers that the revisions being integrated came
-from, or "HEAD" if that was the most recent revision on that branch at
-that time.  Thus, if you see output like this:
-
- On path //depot/perl,
-         delete from //depot/relperl (HEAD), 27 file(s)
-         branch from //depot/relperl (HEAD), 291 file(s)
-         integrate from //depot/relperl (HEAD), 392 file(s)
-
-Then the integration information does not contradict the assertion
-that the change in question is a cross-merge from F<//depot/relperl>
-to F<//depot/perl>.
-
-However, this is not yet quite enough to prove that the integration
-information in the change is a cross-merge; we also need to show that
-there are changes between the I<merge base> of the two branches that
-could have been merged, but are not mentioned.  So, if there are any
-merge candidates they are all inspected to see if there are any files
-which were not merged.  The results are totalled up and displayed.  If
-you add C<-w> to the C<describe> command, then it will save the
-information in the C<grafts> table.
-
-=item C<git-p4raw find-branches [-a] [STARTREV[..REV]]>
-
-Scan the changes from STARTREV to REV and try to find branches.
-
-This command is equivalent to running C<git-p4raw describe N -w>
-successively for each change.
-
-With C<--automatic> (C<-a> for short), the questions about whether to
-treat partial integration as a merge or not will not be asked.
-Instead, a set of built-in fudge values will be used.  Tune in the
-source to taste.
 
 =item C<git-p4raw integrated DEPOTPATH>
 
