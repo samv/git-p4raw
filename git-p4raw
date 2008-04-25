@@ -22,7 +22,7 @@ use JSON;
 use YAML;
 BEGIN { eval "use Term::ProgressBar" };
 
-use vars qw($SHARE $SCRIPT_MODE $SOURCE);
+use vars qw($SHARE $SCRIPT_MODE $SOURCE $FULLY_AUTOMATIC);
 $SHARE = $Bin;
 
 sub do_init {
@@ -1421,12 +1421,14 @@ merges are.
 THIS
 			my $func = ($o_pc > 75 ? \&prompt_Yn : \&prompt_yN);
 			# dirty hack - less than 1 in 25 => no
-			if ( $o_pc > 90 or
-			     ( $o_pc > 66 and @bad < 10 ) ) {
-				$func = sub { 1 };
-			}
-			else {
-				$func = sub { 0 };
+			if ( $FULLY_AUTOMATIC ) {
+				if ( $o_pc > 90 or
+				     ( $o_pc > 66 and @bad < 10 ) ) {
+					$func = sub { 1 };
+				}
+				else {
+					$func = sub { 0 };
+				}
 			}
 			unless ( $func->("Mark as a parent?") ) {
 				push @ignored,
@@ -2605,6 +2607,7 @@ sub parse_export_opts {
 		       "depth=i" => \$export_opts{depth},
 		       "l|long" => \$export_opts{long},
 		       "recalc" => \$export_opts{derive_again},
+		       "automatic|a" => \$FULLY_AUTOMATIC,
 		      );
 		@_ = @ARGV;
 	}
@@ -5878,12 +5881,17 @@ which were not merged.  The results are totalled up and displayed.  If
 you add C<-w> to the C<describe> command, then it will save the
 information in the C<grafts> table.
 
-=item C<git-p4raw find-branches [STARTREV[..REV]]>
+=item C<git-p4raw find-branches [-a] [STARTREV[..REV]]>
 
 Scan the changes from STARTREV to REV and try to find branches.
 
 This command is equivalent to running C<git-p4raw describe N -w>
 successively for each change.
+
+With C<--automatic> (C<-a> for short), the questions about whether to
+treat partial integration as a merge or not will not be asked.
+Instead, a set of built-in fudge values will be used.  Tune in the
+source to taste.
 
 =item C<git-p4raw integrated DEPOTPATH>
 
