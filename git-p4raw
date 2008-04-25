@@ -1394,8 +1394,26 @@ SQL
 			};
 			my $o_pc = sprintf "%d", $seen/$total * 100;
 			whisper "seen: $seen, unseen: $unseen, bo: $bo, pc:$pc opc:$o_pc, integed: $integed_c";
+			my $func = ($o_pc > 75 ? \&prompt_Yn : \&prompt_yN);
+			# dirty hack - less than 1 in 25 => no
+			my $auto = 1;
+			if ( $o_pc > 95 or
+			     ( $o_pc > 75 and @bad < 10 ) ) {
+				$func = sub { 1 };
+			}
+			elsif ( $o_pc < 5 or
+				( $o_pc < 25 and @bad < 10 ) ) {
+				$func = sub { 0 };
+			}
+			elsif ( $FULLY_AUTOMATIC ) {
+				$func = sub { ($o_pc > 66 and @bad < 10) or
+						      $o_pc > 90 };
+			}
+			else {
+				$auto = 0;
+			}
 			print map { my $x = $_; $x =~ s{\n}{ }g;
-				    wrap("","",$x)."\n\n" } split /\n\n/, <<THIS unless ($o_pc < 34 or $o_pc > 90);
+				    wrap("","",$x)."\n\n" } split /\n\n/, <<THIS unless $auto;
 
 Was this change was a merge in the git sense?
 
@@ -1420,20 +1438,6 @@ either way; but getting this wrong will affect later merge-base
 calculations, potentially making it harder to figure out what later
 merges are.
 THIS
-			my $func = ($o_pc > 75 ? \&prompt_Yn : \&prompt_yN);
-			# dirty hack - less than 1 in 25 => no
-			if ( $o_pc > 95 or
-			     ( $o_pc > 75 and @bad < 10 ) ) {
-				$func = sub { 1 };
-			}
-			elsif ( $o_pc < 5 or
-				( $o_pc < 25 and @bad < 10 ) ) {
-				$func = sub { 0 };
-			}
-			elsif ( $FULLY_AUTOMATIC ) {
-				$func = sub { ($o_pc > 66 and @bad < 10) or
-						      $o_pc > 90 };
-			}
 			unless ( $func->("Mark as a parent?") ) {
 				push @ignored,
 					$source_path => \%revcx_by_relpath;
