@@ -1421,14 +1421,17 @@ merges are.
 THIS
 			my $func = ($o_pc > 75 ? \&prompt_Yn : \&prompt_yN);
 			# dirty hack - less than 1 in 25 => no
-			if ( $FULLY_AUTOMATIC ) {
-				if ( $o_pc > 90 or
-				     ( $o_pc > 66 and @bad < 10 ) ) {
-					$func = sub { 1 };
-				}
-				else {
-					$func = sub { 0 };
-				}
+			if ( $o_pc > 95 or
+			     ( $o_pc > 75 and @bad < 10 ) ) {
+				$func = sub { 1 };
+			}
+			elsif ( $o_pc < 5 or
+				( $o_pc < 25 and @bad < 10 ) ) {
+				$func = sub { 0 };
+			}
+			elsif ( $FULLY_AUTOMATIC ) {
+				$func = sub { ($o_pc > 66 and @bad < 10) or
+						      $o_pc > 90 };
 			}
 			unless ( $func->("Mark as a parent?") ) {
 				push @ignored,
