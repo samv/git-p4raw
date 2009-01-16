@@ -353,6 +353,11 @@ SQL
 			my $action = shift @columns;  # "rv", "dv", etc
 			shift @columns;  # some number.  maybe a row version.
 			my $db = $wanted{shift @columns};
+			# Get rid of an extra unknown column
+			# (always set to 0 in my checkpoint files).
+			if ($db eq "rev" && @columns > 12) {
+				splice(@columns,9,1);
+			}
 			my $sth = $get_sth->($db,scalar(@columns)+2);
 			eval {
 				if ( $action eq "dv" ) {
@@ -444,7 +449,7 @@ SQL
 						moan "did NOT load ${table}_new in";
 						next;
 					};
-				$join_cond = "(".join(" AND ", map { "t1.$_ = t2.$_" }
+				$join_cond = "(".join(" AND ", map { "\"$table\".$_ = t2.$_" }
 							 split /\s*,\s*/, $keys).")";
 			}
 
@@ -458,7 +463,7 @@ SQL
 			# delete all matching rows
 			my $sql = <<SQL;
 delete from
-	"$table" t1
+	"$table"
 using
 	"${table}_new" t2
 where
