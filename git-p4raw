@@ -4879,5 +4879,29 @@ In this case, I simply dropped the index, deleted all of the C<marks>
 rows (using C<truncate marks cascade;>), re-ran C<export-blobs>, and
 used C<recover> to read back in all the work that had been done.
 
+=head2 COPYING AND LICENSE
+
+Copyright (c) 2007-2008, Sam Vilain.  All Rights Reserved.  This
+program is free software; you can use it and/or modify it under the
+terms of the GNU General Public License; either version 3 or, at your
+option, any later version.  This license applies to all source files
+which are bundled in any version of C<git-p4raw> which is signed and
+tagged by the relevant copyright holder.  ie, signing a commit
+containing this text is equivalent to licensing all source code
+reachable from that commit for which the signing party holds the
+copyright to under this license, and implies granting of such
+permissions to future versions of those files by that author, unless
+otherwise stated.
+
+BECAUSE THE PROGRAM IS LICENSED FREE OF CHARGE, THERE IS NO WARRANTY
+FOR THE PROGRAM, TO THE EXTENT PERMITTED BY APPLICABLE LAW.  EXCEPT
+WHEN OTHERWISE STATED IN WRITING THE COPYRIGHT HOLDERS AND/OR OTHER
+PARTIES PROVIDE THE PROGRAM "AS IS" WITHOUT WARRANTY OF ANY KIND,
+EITHER EXPRESSED OR IMPLIED, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+PURPOSE.  THE ENTIRE RISK AS TO THE QUALITY AND PERFORMANCE OF THE
+PROGRAM IS WITH YOU.  SHOULD THE PROGRAM PROVE DEFECTIVE, YOU ASSUME
+THE COST OF ALL NECESSARY SERVICING, REPAIR OR CORRECTION.
+
 =cut
 
