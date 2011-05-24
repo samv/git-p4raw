@@ -52,7 +52,11 @@ insert into int_type values
 insert into int_type values
 	(12, 'edit from',    'patch picked but altered from obj to subj.');
 insert into int_type values
-	(13, 'edit into',    'patch picked but altered from subj to obj.');
+	(13, 'add from',    'patch branch downgraded to add.');
+insert into int_type values
+	(14, 'moved into',    'file was renamed');
+insert into int_type values
+	(15, 'moved from',    'reverse of renamed file');
 
 -- integration history (branch/merge/ignore)
 --
