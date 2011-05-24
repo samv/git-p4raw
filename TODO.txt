@@ -54,3 +54,12 @@ git-log utsl/p4/lexwarn/perl utsl/p4/mainline/perl utsl/p4/maint-5.004/perl utsl
 
  - the "p4raw.source" config option should be used more to find the
    path for input and depot files by the other various commands.
+
+- normalize out all paths from various tables
+  create triggers to handle normalizing during insert/updates
+
+- figure out how to support multiple version of the rev table.
+  I think the second column in the checkpoint is the db file 
+  revisions number but not 100% sure.
+
+- add incremental load support
