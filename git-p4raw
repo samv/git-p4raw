@@ -2,6 +2,7 @@
 
 use strict vars, subs;
 use warnings;
+use Env qw(PGDATABASE GIT_DIR);
 use Scriptalicious;
 use Maptastic;
 use Maptastic::DBI qw(row_iter);
@@ -28,6 +29,9 @@ $SHARE = $Bin;
 
 sub do_init {
 	my $dbh = shift;
+  if (defined($GIT_DIR) and ! -d $GIT_DIR ) {
+      mkdir($GIT_DIR);
+  }
 	run("git", "init");
 	run("git", "config", "p4raw.source", getcwd);
 	$dbh->begin_work;
