@@ -61,5 +61,11 @@ git-log utsl/p4/lexwarn/perl utsl/p4/mainline/perl utsl/p4/maint-5.004/perl utsl
 - figure out how to support multiple version of the rev table.
   I think the second column in the checkpoint is the db file 
   revisions number but not 100% sure.
+  Doc for original impl:
+  ftp://ftp.perforce.com/perforce/r06.1/doc/schema/index.html#db.rev
+  Doc for my depot:
+  ftp://ftp.perforce.com/perforce/r09.2/doc/schema/index.html#db.rev
+  Doc for latest db version:
+  ftp://ftp.perforce.com/perforce/r10.2/doc/schema/index.html#IntegHow
 
 - add incremental load support
