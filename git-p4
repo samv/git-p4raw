@@ -1362,12 +1362,18 @@ class P4Sync(Command):
         for change in changes:
             description = p4Cmd("describe %s" % change)
             self.updateOptionDict(description)
-
             if not self.silent:
                 sys.stdout.write("\rImporting revision %s (%s%%)" % (change, cnt * 100 / len(changes)))
                 sys.stdout.flush()
             cnt = cnt + 1
-
+            if description["code"] == "error" :
+                sys.stdout.write("\nFailed to Import revision %s\n" % change)
+                sys.stdout.flush()
+                continue
+            if change == 30502 :
+                print "I should not be here. Skipping 30502"
+                continue
+# XXX cms
             try:
                 if self.detectBranches:
                     branches = self.splitFilesIntoBranches(description)
