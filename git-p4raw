@@ -360,7 +360,8 @@ SQL
 			# Get rid of an extra unknown column
 			# (always set to 0 in my checkpoint files).
 			if ($db eq "rev" && @columns > 12) {
-				splice(@columns,9,1);
+				splice(@columns,9,2); # in rev6 only one column, in rev8 two columns
+        # TODO: figure out the best way to check db version
 			}
 			my $sth = $get_sth->($db,scalar(@columns)+2);
 			eval {
