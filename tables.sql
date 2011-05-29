@@ -128,6 +128,14 @@ insert into change_type values
 	(3, 'branch',    'File copied from another location');
 insert into change_type values
 	(4, 'integrate', 'File metadata and/or contents changed');
+insert into change_type values
+	(5, 'import', 'File add via remote depot');
+insert into change_type values
+	(6, 'purge', 'File purged revision, no longer available');
+insert into change_type values
+	(7, 'movefrom', 'File move from another filename');
+insert into change_type values
+	(8, 'moveto', 'File move to another filename');
 
 -- change inventories for revisions
 create table revcx (
