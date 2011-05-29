@@ -152,8 +152,8 @@ create table revcx (
 
 -- detail on depot RCS files
 create table rev (
-       depotpath TEXT,
-       revision INT,
+       depotpath TEXT, /* depot file */
+       revision INT,   /* depot rev */
        primary key (depotpath, revision),
        file_type INT,	-- type; generally ignored by this tool, save execute
        		 -- 0 0000 0000 0000 - text
@@ -166,15 +166,44 @@ create table rev (
        		 -- 1 0000 0000 0001 - text+w
        		 -- 0 1101 0000 0011 - apple
        		 -- 0 0100 0000 0000 - symlink
-       rev_change_type INT,
-       change INT NOT NULL,
-       useless_epoch1 INT, -- who cares :)
-       useless_epoch2 INT,
-       revision_md5 TEXT,
-       unknown INT,
-       rcs_file TEXT,
-       rcs_revision VARCHAR(10),
-       checkout_type INT   -- this name is a guess.
+       rev_change_type INT, /* action */
+       change INT NOT NULL, /* change list */
+       useless_epoch1 INT, -- who cares :) /* date: of CL */
+       useless_epoch2 INT, /* modtime:  timestatmp on file when submitted */
+       revision_md5 TEXT, /* digest */
+       unknown INT,  /* file size in bytes */
+      /* dropped traitLot: group of attributes associated with revision */
+       rcs_file TEXT, /* lbrFile: filename of archive */
+       rcs_revision VARCHAR(10), /* lbrRev: revision of lbrFile */
+       checkout_type INT   /* lbrType: lbr file type */ -- this name is a guess.
+) inherits (source_file);
+
+create table rev_v8 (
+       depotpath TEXT, /* depot file */
+       revision INT,   /* depot rev */
+       primary key (depotpath, revision),
+       file_type INT,	-- type; generally ignored by this tool, save execute
+       		 -- 0 0000 0000 0000 - text
+       		 -- 0 0010 0000 0000 - xtext (executable bit set)
+       		 -- 0 0000 0010 0000 - ktext (keyword expansion)
+       		 -- 0 0010 0010 0000 - kxtext
+       		 -- 0 0001 0000 0001 - ubinary
+       		 -- 0 0001 0000 0011 - binary
+       		 -- 0 0001 0000 0000 - binary+D
+       		 -- 1 0000 0000 0001 - text+w
+       		 -- 0 1101 0000 0011 - apple
+       		 -- 0 0100 0000 0000 - symlink
+       rev_change_type INT, /* action */
+       change INT NOT NULL, /* change list */
+       change_date INT, -- who cares :) /* date: of CL */
+       modtime INT, /* modtime:  timestatmp on file when submitted */
+       revision_md5 TEXT, /* digest */
+       filesize INT,  /* file size in bytes */
+      /* dropped traitLot: group of attributes associated with revision */
+       is_lazy int, /* lbrIsLazy: flag whether or not the revision gets its content from another file */
+       rcs_file TEXT, /* lbrFile: filename of archive */
+       rcs_revision VARCHAR(10), /* lbrRev: revision of lbrFile */
+       checkout_type INT   /* lbrType: lbr file type */ -- this name is a guess.
 ) inherits (source_file);
 
 -- tags
