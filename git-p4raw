@@ -21,6 +21,7 @@ $Text::Wrap::columns = 72;
 use JSON 1.15;
 use YAML;
 use Encode;
+use Encode::Guess qw(iso-8859-1);
 BEGIN { eval "use Term::ProgressBar" };
 
 use vars qw($SHARE $SCRIPT_MODE $SOURCE $FULLY_AUTOMATIC);
@@ -162,6 +163,7 @@ sub journal_iter {
 				= ($1, $2, $3) if $ok;
 			if ( defined $string ) {
 				$string =~ s{\@\@}{\@}g;
+				#$string = decode('Guess', $string);
 				utf8::upgrade($string);
 				push @columns, $string;
 			}
@@ -809,8 +811,10 @@ sub _p4_disp_rev {
 # didn't try very hard to understand the layout or make this function
 # very clever, I just cared about the types I saw in my own test
 # repository.
-use constant P4_TYPE_EXEC => 0b10_0000_0000;
-use constant P4_TYPE_KORRUPT => 0b10_0000;  # korrupt on checkout
+use constant P4_TYPE_EXEC    =>   0b10_0000_0000;
+use constant P4_TYPE_SYMLINK =>  0b100_0000_0000;
+use constant P4_TYPE_APPLE   => 0b1101_0000_0011;
+use constant P4_TYPE_KORRUPT =>        0b10_0000;  # korrupt on checkout
 sub _p4_type {
 	my $type = shift;
 	my @supp;
@@ -2321,7 +2325,9 @@ sub sha1_blob_ref {
 
 sub _p4_type_to_mode {
 	my $p4_type = shift;
-	($p4_type & P4_TYPE_EXEC ? 0100755 : 0100644);
+	($p4_type == P4_TYPE_APPLE  ? 0100644 :
+	 $p4_type & P4_TYPE_SYMLINK ? 0120000 :
+	    $p4_type & P4_TYPE_EXEC ? 0100755 : 0100644);
 }
 
 sub show_files {
@@ -2665,7 +2671,7 @@ sub gfi_open {
 	my $eo = shift;
 	$MARKS_FILE ||= "p4raw.$$.marks";
 	if ( -t STDOUT ) {
-		open GFI, "|git fast-import --quiet "
+		open GFI, "|git-fast-import --quiet "
 			.($eo->{gfi_options}||"")
 			.($eo->{depth}?"--depth=$eo->{depth} ":"")
 			."--export-marks=$MARKS_FILE"
@@ -2738,6 +2744,10 @@ sub gfi_data {
 	my $l = length($$buf);
 	print GFI "data $l\n";
 	print GFI $$buf, "\n";
+}
+
+sub gfi_deleteall {
+	print GFI "deleteall\n";
 }
 
 sub gfi_utf8_data {
@@ -2992,7 +3002,8 @@ select
 	rcs_file,
 	rcs_revision,
 	rev_change_type,
-	revision_md5
+	revision_md5,
+        file_type
 from
 	rev
 	left join rev_marks rm
@@ -3030,7 +3041,7 @@ SQL
 		$list_rcs_revs->execute(@{$row}{qw/depotpath min max/});
 		$list_rcs_revs->bind_columns
 			(\(my ($rev, $rcs_file, $rcs_revision,
-			       $change_type, $md5)));
+			       $change_type, $md5, $file_type)));
 
 		while ( $list_rcs_revs->fetch ) {
 			next if $seen{md5_hex("$depotpath#$rev")}++;
@@ -3060,6 +3071,7 @@ SQL
 					    ."$md5 in DB");
 				}
 			}
+			chomp($contents) if $file_type & P4_TYPE_SYMLINK;
 
 			$mark = gfi_send_blob($dbh, \$contents);
 			$md5_mark{$lc_md5||$found_md5}
@@ -3320,7 +3332,7 @@ where
 order by
 	cb.change,
 	cb.branchpath,
-	(cp.parent_branchpath = cb.branchpath) desc
+	(coalesce(cp.parent_branchpath, '') = cb.branchpath) desc
 SQL
 
 	# a big query yes, but remember this is git-*fast*-import ;)
@@ -3358,7 +3370,8 @@ SQL
 				($x->{parent_branchpath},
 				 $x->{parent_change});
 			if ( $pb ) {
-				my $mark = $x->{mark} || $cb_marks{$pb}{$pc};
+				my $mark = $x->{mark} || $cb_marks{$pb}{$pc}
+				    or die "lost mark for $pb:$pc";
 				$ref = ":$mark";
 			}
 			else {
@@ -3385,6 +3398,7 @@ from
 where
 	change between ? and ?
 and	closed = 1
+order by change
 SQL
 
 	my $insert_commit_mark_sth = $dbh->prepare(<<SQL);
@@ -3443,7 +3457,7 @@ SQL
 		}
 		# and put the change back!
 		$desc_i->($desc);
-		die "wrong change!"
+		die "wrong change!  expected $change_br->{change}, got $desc->{change}"
 			if $desc->{change} != $change_br->{change};
 
 		my ($author, $committer, $description)
@@ -3467,6 +3481,7 @@ SQL
 		# write out the parents
 		my $n = 0;
 		my $from = shift @parents;
+		my $delete_all;
 		if ( $from->{branchpath} ne $bp or !$branches{$bp}
 		     or $branches{$bp} != $from->{parent_change}
 		   ) {
@@ -3474,15 +3489,25 @@ SQL
 			whisper "sending 'from' of $where"
 				if $where;
 			gfi_from($where);
+			if ( $from->{parent_branchpath} ne $bp ) {
+			        # the default parent is a different branch, 
+				# delete it!
+				whisper "delete all; $from->{parent_branchpath} is not $bp";
+				$delete_all = 1;
+			}
 		}
 		if (@parents) {
 			mutter @parents." extra merge parents";
 			gfi_merge(map { $to_ref->($_) } @parents);
 		}
+		if ( $delete_all ) {
+			gfi_deleteall();
+		}
 
 		# now, get all the files in that revision and send
 		# them to gfi
 		while ( my $rev = $files->() ) {
+			$rev->{relpath} =~ s{%([0-9a-f][0-9a-f])}{chr(hex($1))}eg;
 			if ( $rev->{change} != $change_br->{change} or
 			     $rev->{branchpath} ne $change_br->{branchpath}
 			   ) {
@@ -4201,7 +4226,6 @@ Malcolm Beattie			<mbeattie@sable.ox.ac.uk>
 Manuel Valente			<mvalente@idealx.com>
 Marc Lehmann			<pcg@goof.com>
 Marc Paquette			<Marc.Paquette@Softimage.COM>
-Marcel Grunauer			<marcel@codewerk.com>
 Marek Rouchal			<marek.rouchal@infineon.com>
 Mark A Biggar			<mab@wdl.loral.com>
 Marcus Holland-Moritz		<mhx-perl@gmx.net>
@@ -4602,6 +4626,7 @@ Yves Orton			<demerphq@gmail.com>
 Artur Bergman <sky@nanisky.com>
 Zachary Miller			<zcmiller@simon.er.usgs.gov>
 Ævar Arnfjörð Bjarmason		<avar@cpan.org>
+Marcel Grünauer                  <marcel@codewerk.com>
 CAST_AND_CREW
 $cast_and_crew{"(name lost)"} = '<unknown@unknown>';
 
@@ -4634,6 +4659,7 @@ $cnc_email{'avarab@gmail.com'} = 'Ævar Arnfjörð Bjarmason';
 $cnc_email{'richard.foley@ubs.com'} = 'Richard Foley';
 $cnc_email{'sebastien@aperghis.net'} = 'Sébastien Aperghis-Tramoni';
 $cnc_email{'TimBunce@ig.ac.uk'} = 'Tim Bunce';
+$cnc_email{'brent@brentdax.com'} = 'Brent Dax';
 $cnc_email{'Jarkko.Hietaniemi@cc.hut.fi'} = "Jarkko Hietaniemi";
 $cnc_email{'andreas.koenig@anima.de'} = "Andreas König";
 $cnc_email{'andreas.koenig@kulturbox.de'} = "Andreas König";
@@ -4647,6 +4673,7 @@ $cnc_email{'autrijus@autrijus.org'} = "Audrey Tang";
 $cnc_email{'autrijus@egb.elixus.org'} = "Audrey Tang";
 $cnc_email{'autrijus@geb.elixus.org'} = "Audrey Tang";
 $cnc_email{'autrijus@gmail.com'} = "Audrey Tang";
+#$cast_and_crew{"Marcel \"Grünauer"} = 'marcel@codewerk.com';
 
 # from checkAUTHORS.pl;
 my $l;
@@ -4885,6 +4912,7 @@ CONTRIBS
 
 sub make_commit {
 	my $desc = shift;
+	use Devel::Peek;
 	my @parents = @_;
 
 	my $author = undef;
@@ -4907,6 +4935,10 @@ sub make_commit {
 	my $description = $desc->{description};
 	$description =~ s{\r\n?}{\n}g;
 	$description =~ s{^(.*=\?.*)$}{decode('MIME-Header', $1)}meg;
+	$description = join "\n", map { utf8::valid($_) ? $_ : decode('Guess', $_) }
+	    split "\n", $description;
+	#$description =~ s{(.*)}{print STDERR "doing: >$1<\n"; length($1) ? decode('Guess', $1) : $1}eg;
+	#Dump $description;
 
 	# some perl-specific touch-ups
 	my @authors = $description =~ m{^\s*From:\s*(.*\S)\s*$}mg;
@@ -4936,7 +4968,7 @@ sub make_commit {
 	# from those messages instead
 	if (@authors == 1 or (set(@authors)->size == 1)) {
 		for ( @authors ) {
-			s{\[at\]}{@}g;
+			s{\[at\]|\s+at\s+}{@}g;
 			s{\*\* .* \*\*}{};
 			s{^.*Konovalov.*}{Vadim Konovalov};
 			s{.*Maddingue.*}{sebastien\@aperghis.net};
@@ -4944,7 +4976,10 @@ sub make_commit {
 			s{.*by way of }{};
 			s{\s*\(via\s+RT\)\s*}{ };
 			s{\s*via\s+RT\s*}{ };
+			s{\\"}{"}g;
 			s{^\s*['"]\s*|\s*['"]\s*$}{}g;
+			$DB::single = 1;
+			s{"}{} if (y/"/"/ == 1);
 			s{\s\s+}{ }g;
 		}
 		$author = [ $authors[0]=~m{([^<]*) <(.*@.*)>} ];
@@ -4966,7 +5001,15 @@ sub make_commit {
 				}
 			}
 		}
-		$author->[0] =~ s{^['"]|['"]$}{}g;
+		$author->[0] =~ s{(['"])(.*)\1}{$2}g;
+		$author->[0] =~ s{"}{} if ($author->[0] =~ y/"/"/) == 1;
+		if ( $author->[0] =~ m{@} ) {
+			$author->[1] = $author->[0];
+		}
+		$author->[1] =~ s{\s+at\s+}{@};
+		if ( $author->[1] =~ m{perlbug-followup} ) {
+			$author->[1] = "unknown";
+		}
 		if ( $contribs{$author->[1]} ) {
 			mutter "$author->[1] is a known contributor";
 			$author->[1] = $contribs{$author->[1]};
@@ -5155,7 +5198,8 @@ sub do_unexport_commits {
 		for my $dp ( keys %current ) {
 			my $rc = run_err qw(git update-ref), "-d",
 				_path2ref($dp), $current{$dp}{commitid};
-			moan "failed to delete ref "._path2ref($dp);
+			moan "failed to delete ref "._path2ref($dp)
+				if $rc;
 		}
 	}
 	elsif ( !$moved ) {
@@ -5272,12 +5316,6 @@ sub do_graft {
 	abort "bogus extra arguments: @_"
 		if @_ and $graft_opts{delete};
 	$dbh->begin_work;
-	if ( $graft_opts{delete} or !$graft_opts{add} ) {
-		$dbh->do(<<SQL);
-delete from change_parents
-where manual
-SQL
-	}
 	my ($change, @parents);
 	my $c2bpc = sub {
 		my $change = shift;
@@ -5314,6 +5352,12 @@ SQL
 		if ( !ref $top ) {
 			abort "can't graft onto git ref '$top' - only "
 				."branchpaths"
+		}
+		if ( $graft_opts{delete} or !$graft_opts{add} ) {
+		    $dbh->do(<<SQL, undef, @$top);
+delete from change_parents
+where manual and branchpath = ? and change = ?
+SQL
 		}
 		for my $graft ( @places ) {
 			if ( ref $graft ) {
@@ -5528,7 +5572,7 @@ SQL
 				# use a ref.  See if this commit has a tag.
 				my $name_rev = `git-name-rev --tags $parent 2>/dev/null`;
 				$DB::single = 1;
-				my ($parent_ref) = $name_rev =~ m{ tags/(.*)\^};
+				my ($parent_ref) = $name_rev =~ m{ tags/(.*)\^0\s*$};
 
 				# no tag?  Oh well, use the raw commit ID
 				$parent_ref ||= substr $parent, 0, 12;
@@ -5547,7 +5591,7 @@ SQL
 		$heads = join " ", map { m{(refs/heads/.*)} } `git-show-ref --heads`;
 	}
 
-	open(my $rec, "-|", "git-log --topo-order --reverse --parents $heads");
+	open(my $rec, "-|", "git-log -m --topo-order --reverse --parents $heads");
 	while ( <$rec> ) {
 		if ( m{^commit (\w+)(?: (.*))?$} ) {
 			$commit=$1;
@@ -5584,6 +5628,7 @@ if (! -t STDOUT) {
 }
 
 binmode STDOUT, ":utf8";
+binmode STDERR, ":utf8";
 
 my $action = shift;
 abort "no action given" unless $action;

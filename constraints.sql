@@ -72,7 +72,10 @@ alter table change_parents add constraint change_parents_valid
       references change_branches(branchpath, change) deferrable;
 create unique index change_parents_sanity
        on change_parents(change, branchpath, parent_branchpath,
-       parent_change, manual);
+       manual);
+create unique index change_parents_sanity_again
+       on change_parents(change, branchpath, parent_branchpath,
+       manual) where not ref;
 
 -- create indexes:
 create index integed_change_idx on integed (change);
