@@ -98,11 +98,13 @@ create table change (
 			-- 'change', or a dead revision.  The one time it
 			-- referred to an extant revision, the change was
 			-- described as "Some weirdness in the intgrate"
-    who_host text,
+    who_host text, /* client */
     who_user text,
     change_time int, 	-- epoch time of change
     closed int,		-- whether this change is committed yet
+                /* change status: 0 pending, 1 committed, 2 shelved */
     short_desc text     -- short description of change
+    , root_mapping text /* common path for all files in the CL */
 ) inherits (source_file);
 
 -- change description table
