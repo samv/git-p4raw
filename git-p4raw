@@ -184,7 +184,7 @@ sub journal_iter {
 				do {
 					$line = $fh->getline;
 					push @extra, $line;
-				} until ($line =~ m{^(?:[^@]|\@\@)*@ ?$});
+				} until ($line =~ m{^(?:[^@]|\@\@)*@(?: |$)});
 				$L=join("",$L,@extra);
 				pos($L) = $p;
 				redo;
